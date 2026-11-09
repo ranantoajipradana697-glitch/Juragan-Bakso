@@ -1,0 +1,63 @@
+# Dependencies & Package Managers
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Vercel Deployment & Local Build Cache
+.vercel/
+.next/
+.output/
+dist/
+build/
+
+# Environment Variables & Secrets
+.env
+.env.*
+!.env.example
+*.pem
+
+# Editor & IDE Directories
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs & Debugging
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Archives & Zips
+*.zip
+*.rar
+*.7z
+*.tar.gz
+
+# Internal Prompts, Design Briefs & AI Rules (Aman dari Dosen)
+anti-ai-slop.md
+prd_project_brief_juragan_bakso_platform.md
+.gemini/
+.system_generated/
+scratch/
+tmp/
+temp/
+tambahan/
+.orders_fallback.json
+.menus_fallback.json
+.users_fallback.json

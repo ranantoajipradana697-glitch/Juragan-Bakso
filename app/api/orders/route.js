@@ -69,10 +69,36 @@ export async function GET(request) {
       );
       orders = ordersWithItems;
 
-      // Jika di MySQL belum ada pesanan baru, sertakan pesanan dari fallback agar tidak kosong
-      if (orders.length === 0) {
-        orders = dbFallback.getOrders(status);
+      // Gabungkan pesanan dari fallback store yang belum ada di MySQL agar data selalu sinkron
+      const fallbackOrders = dbFallback.getOrders(status);
+      const existingIds = new Set(orders.map(o => String(o.id).toLowerCase()));
+      for (const fo of fallbackOrders) {
+        if (!existingIds.has(String(fo.id).toLowerCase())) {
+          let match = true;
+          if (phone) {
+            const cleanPhone = phone.replace(/[^0-9]/g, '');
+            const oPhone = String(fo.customer_phone || '').replace(/[^0-9]/g, '');
+            if (!oPhone.includes(cleanPhone)) match = false;
+          }
+          if (q) {
+            const cleanQ = q.toLowerCase().trim();
+            const idMatch = fo.id.toLowerCase().includes(cleanQ);
+            const nameMatch = (fo.customer_name || '').toLowerCase().includes(cleanQ);
+            const phoneMatch = (fo.customer_phone || '').includes(cleanQ);
+            if (!idMatch && !nameMatch && !phoneMatch) match = false;
+          }
+          if (match) {
+            orders.push(fo);
+          }
+        }
       }
+
+      // Urutkan pesanan terbaru di paling atas berdasarkan nomor ID
+      orders.sort((a, b) => {
+        const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
+        const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
+        return numB - numA;
+      });
     } else {
       orders = dbFallback.getOrders(status);
 

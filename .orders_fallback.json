@@ -1,0 +1,204 @@
+[
+  {
+    "id": "#BKS-092",
+    "customer_name": "Fatih",
+    "customer_phone": "081275516335",
+    "order_type": "dine-in",
+    "order_type_label": "Makan di Tempat",
+    "order_detail_meta": "Meja No. 05",
+    "items": [
+      {
+        "id": 7,
+        "name": "Es Campur Durian Asli",
+        "price": 18000,
+        "qty": 10,
+        "subtotal": 180000
+      }
+    ],
+    "notes": "-",
+    "packaging_fee": 0,
+    "total": 180000,
+    "payment_method": "QRIS Instan (AJI STORE)",
+    "status": "baru",
+    "timestamp": "20:19 WIB",
+    "time_ago": "Baru saja"
+  },
+  {
+    "id": "#BKS-091",
+    "customer_name": "aji",
+    "customer_phone": "0812345678",
+    "order_type": "dine-in",
+    "order_type_label": "Makan di Tempat",
+    "order_detail_meta": "Meja No. 08",
+    "items": [
+      {
+        "id": 6,
+        "name": "Pangsit Goreng Renyah (Isi 3)",
+        "price": 8000,
+        "qty": 1,
+        "subtotal": 8000
+      },
+      {
+        "id": 4,
+        "name": "Mie Ayam Bakso Pangsit",
+        "price": 25000,
+        "qty": 2,
+        "subtotal": 50000
+      },
+      {
+        "id": 8,
+        "name": "Es Teh Manis Jumbo",
+        "price": 5000,
+        "qty": 3,
+        "subtotal": 15000
+      }
+    ],
+    "notes": "Porsi Kuli",
+    "packaging_fee": 0,
+    "total": 73000,
+    "payment_method": "QRIS Instan (AJI STORE)",
+    "status": "selesai",
+    "timestamp": "21:42 WIB",
+    "time_ago": "Baru saja"
+  },
+  {
+    "id": "#BKS-089",
+    "customer_name": "Pak Budi Santoso",
+    "customer_phone": "0812-9988-1029",
+    "order_type": "dine-in",
+    "order_type_label": "Makan di Tempat - Meja 04",
+    "order_detail_meta": "Nomor Meja: Meja 04",
+    "items": [
+      {
+        "name": "Bakso Urat Granat Jumbo",
+        "price": 32000,
+        "qty": 2
+      },
+      {
+        "name": "Bakso Halus Komplit Tetelan",
+        "price": 35000,
+        "qty": 1
+      },
+      {
+        "name": "Es Teh Manis Jumbo",
+        "price": 5000,
+        "qty": 3
+      }
+    ],
+    "notes": "Bakso urat kuah pedas level 3, jangan pakai seledri",
+    "packaging_fee": 0,
+    "total": 114000,
+    "payment_method": "QRIS • Lunas",
+    "status": "baru",
+    "timestamp": "12:41 WIB",
+    "time_ago": "2m lalu"
+  },
+  {
+    "id": "#BKS-090",
+    "customer_name": "Ibu Ratna Dewi",
+    "customer_phone": "0856-7711-2099",
+    "order_type": "delivery",
+    "order_type_label": "Pesan Antar - Kurir Instan",
+    "order_detail_meta": "Jl. Malaka Baru No. 10 (Pagar Putih)",
+    "items": [
+      {
+        "name": "Bakso Urat Granat Jumbo",
+        "price": 32000,
+        "qty": 1
+      },
+      {
+        "name": "Tetelan Sapi Gurih Tambahan",
+        "price": 12000,
+        "qty": 1
+      },
+      {
+        "name": "Pangsit Goreng Renyah (Isi 3)",
+        "price": 8000,
+        "qty": 1
+      }
+    ],
+    "notes": "Sambal dipisah 3 bungkus, kuah panas",
+    "packaging_fee": 2000,
+    "total": 54000,
+    "payment_method": "COD Kurir",
+    "status": "baru",
+    "timestamp": "12:44 WIB",
+    "time_ago": "1m lalu"
+  },
+  {
+    "id": "#BKS-088",
+    "customer_name": "Dimas Anggara",
+    "customer_phone": "0878-1002-4411",
+    "order_type": "takeaway",
+    "order_type_label": "Bungkus / Takeaway",
+    "order_detail_meta": "Estimasi Diambil: 15 Menit",
+    "items": [
+      {
+        "name": "Bakso Halus Komplit Tetelan",
+        "price": 35000,
+        "qty": 3
+      },
+      {
+        "name": "Es Teh Manis Jumbo",
+        "price": 5000,
+        "qty": 2
+      }
+    ],
+    "notes": "Kecap manis dipisah",
+    "packaging_fee": 2000,
+    "total": 117000,
+    "payment_method": "Transfer • Lunas",
+    "status": "masak",
+    "timestamp": "12:35 WIB",
+    "time_ago": "10m lalu"
+  },
+  {
+    "id": "#BKS-087",
+    "customer_name": "Siti Rahmah",
+    "customer_phone": "0813-2223-8877",
+    "order_type": "dine-in",
+    "order_type_label": "Makan di Tempat - Meja 08",
+    "order_detail_meta": "Nomor Meja: Meja 08",
+    "items": [
+      {
+        "name": "Bakso Urat Granat Jumbo",
+        "price": 32000,
+        "qty": 2
+      }
+    ],
+    "notes": "Kering tanpa kuah, sambal banyak",
+    "packaging_fee": 0,
+    "total": 64000,
+    "payment_method": "Kasir Tunai • Lunas",
+    "status": "siap",
+    "timestamp": "12:28 WIB",
+    "time_ago": "17m lalu"
+  },
+  {
+    "id": "#BKS-086",
+    "customer_name": "Hendra Kurnia",
+    "customer_phone": "0811-4567-9900",
+    "order_type": "dine-in",
+    "order_type_label": "Makan di Tempat - Meja 02",
+    "order_detail_meta": "Nomor Meja: Meja 02",
+    "items": [
+      {
+        "name": "Bakso Halus Komplit Tetelan",
+        "price": 35000,
+        "qty": 1
+      },
+      {
+        "name": "Es Teh Manis Jumbo",
+        "price": 5000,
+        "qty": 1
+      }
+    ],
+    "notes": "-",
+    "packaging_fee": 0,
+    "total": 40000,
+    "payment_method": "QRIS • Selesai",
+    "status": "selesai",
+    "timestamp": "12:15 WIB",
+    "time_ago": "30m lalu"
+  }
+]

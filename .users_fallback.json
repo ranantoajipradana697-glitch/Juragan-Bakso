@@ -1,0 +1,38 @@
+[
+  {
+    "id": 1,
+    "identifier": "admin@baksojuara.com",
+    "password": "DapurJuara#Benhil24",
+    "role": "admin",
+    "name": "Admin Kasir Shift Pagi",
+    "phone": "082299548784",
+    "pin": "882109"
+  },
+  {
+    "id": 2,
+    "identifier": "081289004411",
+    "password": "MakanBakso2025!",
+    "role": "customer",
+    "name": "Budi Santoso",
+    "phone": "081289004411",
+    "pin": null
+  },
+  {
+    "id": 3,
+    "identifier": "081275516335",
+    "password": "123456",
+    "role": "customer",
+    "name": "Fatih",
+    "phone": "081275516335",
+    "pin": null
+  },
+  {
+    "id": 4,
+    "identifier": "0812345678",
+    "password": "123456",
+    "role": "customer",
+    "name": "aji",
+    "phone": "0812345678",
+    "pin": null
+  }
+]

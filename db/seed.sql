@@ -5,7 +5,9 @@ USE `juragan_bakso_db`;
 INSERT INTO `users` (`identifier`, `password`, `role`, `name`, `phone`, `pin`)
 VALUES
   ('admin@baksojuara.com', 'DapurJuara#Benhil24', 'admin', 'Admin Kasir Shift Pagi', '082299548784', '882109'),
-  ('081289004411', 'MakanBakso2025!', 'customer', 'Budi Santoso', '081289004411', NULL)
+  ('081289004411', 'MakanBakso2025!', 'customer', 'Budi Santoso', '081289004411', NULL),
+  ('081275516335', '123456', 'customer', 'Fatih', '081275516335', NULL),
+  ('0812345678', '123456', 'customer', 'aji', '0812345678', NULL)
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
 
 -- 2. Insert Default Settings
@@ -36,16 +38,22 @@ ON DUPLICATE KEY UPDATE `price` = VALUES(`price`), `stock` = VALUES(`stock`);
 -- 4. Insert Default Sample Orders
 INSERT INTO `orders` (`id`, `customer_name`, `customer_phone`, `order_type`, `order_type_label`, `order_detail_meta`, `notes`, `packaging_fee`, `total`, `payment_method`, `status`, `created_at`)
 VALUES
-  ('#BKS-089', 'Pak Budi Santoso', '0812-9988-1029', 'dine-in', 'Makan di Tempat - Meja 04', 'Nomor Meja: Meja 04', 'Bakso urat kuah pedas level 3, jangan pakai seledri', 0.00, 114000.00, 'QRIS • Lunas', 'baru', NOW() - INTERVAL 2 MINUTE),
-  ('#BKS-090', 'Ibu Ratna Dewi', '0856-7711-2099', 'delivery', 'Pesan Antar - Kurir Instan', 'Jl. Malaka Baru No. 10 (Pagar Putih)', 'Sambal dipisah 3 bungkus, kuah panas', 2000.00, 54000.00, 'COD Kurir', 'baru', NOW() - INTERVAL 1 MINUTE),
-  ('#BKS-088', 'Dimas Anggara', '0878-1002-4411', 'takeaway', 'Bungkus / Takeaway', 'Estimasi Diambil: 15 Menit', 'Kecap manis dipisah', 2000.00, 117000.00, 'Transfer • Lunas', 'masak', NOW() - INTERVAL 10 MINUTE),
-  ('#BKS-087', 'Siti Rahmah', '0813-2223-8877', 'dine-in', 'Makan di Tempat - Meja 08', 'Nomor Meja: Meja 08', 'Kering tanpa kuah, sambal banyak', 0.00, 64000.00, 'Kasir Tunai • Lunas', 'siap', NOW() - INTERVAL 17 MINUTE),
-  ('#BKS-086', 'Hendra Kurnia', '0811-4567-9900', 'dine-in', 'Makan di Tempat - Meja 02', 'Nomor Meja: Meja 02', '-', 0.00, 40000.00, 'QRIS • Selesai', 'selesai', NOW() - INTERVAL 30 MINUTE)
+  ('#BKS-092', 'Fatih', '081275516335', 'dine-in', 'Makan di Tempat - Meja 05', 'Nomor Meja: Meja 05', '-', 0.00, 180000.00, 'QRIS Instan (AJI STORE)', 'baru', NOW() - INTERVAL 1 MINUTE),
+  ('#BKS-091', 'aji', '0812345678', 'dine-in', 'Makan di Tempat - Meja 08', 'Nomor Meja: Meja 08', 'Porsi Kuli', 0.00, 73000.00, 'QRIS Instan (AJI STORE)', 'selesai', NOW() - INTERVAL 2 MINUTE),
+  ('#BKS-089', 'Pak Budi Santoso', '0812-9988-1029', 'dine-in', 'Makan di Tempat - Meja 04', 'Nomor Meja: Meja 04', 'Bakso urat kuah pedas level 3, jangan pakai seledri', 0.00, 114000.00, 'QRIS • Lunas', 'baru', NOW() - INTERVAL 10 MINUTE),
+  ('#BKS-090', 'Ibu Ratna Dewi', '0856-7711-2099', 'delivery', 'Pesan Antar - Kurir Instan', 'Jl. Malaka Baru No. 10 (Pagar Putih)', 'Sambal dipisah 3 bungkus, kuah panas', 2000.00, 54000.00, 'COD Kurir', 'baru', NOW() - INTERVAL 15 MINUTE),
+  ('#BKS-088', 'Dimas Anggara', '0878-1002-4411', 'takeaway', 'Bungkus / Takeaway', 'Estimasi Diambil: 15 Menit', 'Kecap manis dipisah', 2000.00, 117000.00, 'Transfer • Lunas', 'masak', NOW() - INTERVAL 20 MINUTE),
+  ('#BKS-087', 'Siti Rahmah', '0813-2223-8877', 'dine-in', 'Makan di Tempat - Meja 08', 'Nomor Meja: Meja 08', 'Kering tanpa kuah, sambal banyak', 0.00, 64000.00, 'Kasir Tunai • Lunas', 'siap', NOW() - INTERVAL 25 MINUTE),
+  ('#BKS-086', 'Hendra Kurnia', '0811-4567-9900', 'dine-in', 'Makan di Tempat - Meja 02', 'Nomor Meja: Meja 02', '-', 0.00, 40000.00, 'QRIS • Selesai', 'selesai', NOW() - INTERVAL 35 MINUTE)
 ON DUPLICATE KEY UPDATE `status` = VALUES(`status`);
 
 -- 5. Insert Order Items for Sample Orders
 INSERT INTO `order_items` (`order_id`, `menu_id`, `menu_name`, `price`, `qty`, `subtotal`)
 VALUES
+  ('#BKS-092', 7, 'Es Campur Durian Asli', 18000.00, 10, 180000.00),
+  ('#BKS-091', 6, 'Pangsit Goreng Renyah (Isi 3)', 8000.00, 1, 8000.00),
+  ('#BKS-091', 4, 'Mie Ayam Bakso Pangsit', 25000.00, 2, 50000.00),
+  ('#BKS-091', 8, 'Es Teh Manis Jumbo', 5000.00, 3, 15000.00),
   ('#BKS-089', 1, 'Bakso Urat Granat Jumbo', 32000.00, 2, 64000.00),
   ('#BKS-089', 2, 'Bakso Halus Komplit Tetelan', 35000.00, 1, 35000.00),
   ('#BKS-089', 8, 'Es Teh Manis Jumbo', 5000.00, 3, 15000.00),

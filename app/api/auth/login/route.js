@@ -25,9 +25,10 @@ export async function POST(request) {
 
     // 1. Coba query dari MySQL jika database aktif
     try {
+      const normPhone = normalizePhone(cleanIdentifier);
       const dbRes = await query(
-        'SELECT id, identifier, password, role, name, phone, pin FROM users WHERE identifier = ? OR phone = ? LIMIT 1',
-        [cleanIdentifier, cleanIdentifier]
+        'SELECT id, identifier, password, role, name, phone, pin FROM users WHERE identifier = ? OR phone = ? OR identifier = ? OR phone = ? LIMIT 1',
+        [cleanIdentifier, cleanIdentifier, normPhone || cleanIdentifier, normPhone || cleanIdentifier]
       );
 
       if (dbRes.isMysql && dbRes.rows && dbRes.rows.length > 0) {

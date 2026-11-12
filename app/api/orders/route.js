@@ -118,9 +118,15 @@ export async function POST(request) {
     let createdOrder = null;
 
     // Coba simpan ke MySQL jika online
-    const countRes = await query('SELECT COUNT(*) as cnt FROM orders');
-    const orderCount = (countRes.rows && countRes.rows[0]?.cnt ? Number(countRes.rows[0].cnt) : 0) + 91;
-    const orderId = `#BKS-${String(orderCount).padStart(3, '0')}`;
+    const countRes = await query('SELECT id FROM orders ORDER BY created_at DESC LIMIT 1');
+    let orderNum = 91;
+    if (countRes.isMysql && countRes.rows && countRes.rows.length > 0) {
+      const match = String(countRes.rows[0].id || '').match(/\d+/);
+      if (match) {
+        orderNum = Math.max(91, parseInt(match[0], 10) + 1);
+      }
+    }
+    const orderId = `#BKS-${String(orderNum).padStart(3, '0')}`;
 
     const insertOrderRes = await query(
       `INSERT INTO orders (id, customer_name, customer_phone, order_type, order_type_label, order_detail_meta, notes, packaging_fee, total, payment_method, status)
@@ -149,12 +155,20 @@ export async function POST(request) {
            VALUES (?, ?, ?, ?, ?)`,
           [orderId, it.name, itemPrice, itemQty, itemPrice * itemQty]
         );
-        // Kurangi stok
+        // Kurangi stok & perbarui ketersediaan jika habis
         await query(
-          `UPDATE menus SET stock = GREATEST(0, stock - ?) WHERE name = ?`,
-          [itemQty, it.name]
+          `UPDATE menus 
+           SET stock = GREATEST(0, stock - ?),
+               is_available = (GREATEST(0, stock - ?) > 0),
+               badge = IF(GREATEST(0, stock - ?) <= 0, 'Habis / Sold Out', IF(GREATEST(0, stock - ?) <= 5, CONCAT('Menipis (', GREATEST(0, stock - ?), ')'), badge)),
+               badge_type = IF(GREATEST(0, stock - ?) <= 0, 'error', IF(GREATEST(0, stock - ?) <= 5, 'primary', badge_type))
+           WHERE TRIM(LOWER(name)) = TRIM(LOWER(?)) OR id = ?`,
+          [itemQty, itemQty, itemQty, itemQty, itemQty, itemQty, it.name, it.id || 0]
         );
       }
+
+      // Sinkronkan pemotongan stok ke fallback memory store
+      dbFallback.deductStock(items);
 
       createdOrder = {
         id: orderId,

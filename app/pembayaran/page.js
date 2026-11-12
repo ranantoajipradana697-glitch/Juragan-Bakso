@@ -20,7 +20,7 @@ export default function PembayaranPage() {
   // Customer Data
   const [custName, setCustName] = useState('Budi Santoso');
   const [custPhone, setCustPhone] = useState('0822-9954-8784');
-  const [custNotes, setCustNotes] = useState('Kuah dipisah, banyakin sambal & bawang goreng gurih');
+  const [custNotes, setCustNotes] = useState('');
   
   // Payment State
   const [paymentMethod, setPaymentMethod] = useState('qris'); // 'qris', 'tunai', 'cod'
@@ -206,7 +206,7 @@ export default function PembayaranPage() {
   const totalQty = cart.reduce((sum, it) => sum + it.qty, 0);
 
   // WhatsApp Message Generator
-  const generateWhatsAppMessage = () => {
+  const generateWhatsAppMessage = (customOrderId = null) => {
     let orderTypeLabel = 'Makan di Tempat (Dine-In)';
     let orderDetailMeta = `Nomor Meja: ${tableNo}`;
 
@@ -227,9 +227,13 @@ export default function PembayaranPage() {
     if (paymentMethod === 'tunai') paymentInfo = 'Tunai / Langsung di Kasir';
     if (paymentMethod === 'cod') paymentInfo = 'COD (Bayar Tunai ke Kurir)';
 
+    const displayOrderId = customOrderId 
+      ? (String(customOrderId).startsWith('#') ? customOrderId : `#${customOrderId}`)
+      : `#${referenceCode}`;
+
     return `*PESANAN BARU - JURAGAN BAKSO NUSANTARA*
 ---------------------------------------
-*Kode Pesanan:* #${referenceCode}
+*Kode Pesanan:* ${displayOrderId}
 *Waktu:* ${new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })} WIB
 *Pelanggan:* ${custName}
 *No. WhatsApp:* ${custPhone}
@@ -252,7 +256,7 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
   const submitOrder = async () => {
     if (paymentMethod === 'qris' && qrisExpired) {
       showToast('Waktu pembayaran QRIS telah habis (10 menit). Silakan generate ulang QRIS.');
-      setShowExpiredModal(true);
+      setShowQrisModal(true);
       return;
     }
     if (cart.length === 0) {
@@ -268,25 +272,33 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
       return;
     }
 
+    setSubmitting(true);
+
+    const itemsPayload = cart.map(it => ({
+      id: it.id || undefined,
+      name: it.name,
+      price: it.price,
+      qty: it.qty,
+      subtotal: it.price * it.qty
+    }));
+
+    let orderTypeLabel = 'Makan di Tempat';
+    let metaInfo = tableNo;
+    if (orderType === 'takeaway') {
+      orderTypeLabel = 'Bungkus';
+      metaInfo = pickupTime;
+    } else if (orderType === 'delivery') {
+      orderTypeLabel = 'Pesan Antar';
+      metaInfo = deliveryAddress;
+    }
+
+    const paymentMethodLabel = paymentMethod === 'qris' 
+      ? 'QRIS Instan (AJI STORE)' 
+      : paymentMethod === 'tunai' 
+      ? 'Kasir Tunai • Menunggu Scan di Kasir' 
+      : 'COD Kurir';
+
     try {
-      setSubmitting(true);
-      const itemsPayload = cart.map(it => ({
-        name: it.name,
-        price: it.price,
-        qty: it.qty,
-        subtotal: it.price * it.qty
-      }));
-
-      let orderTypeLabel = 'Makan di Tempat';
-      let metaInfo = tableNo;
-      if (orderType === 'takeaway') {
-        orderTypeLabel = 'Bungkus';
-        metaInfo = pickupTime;
-      } else if (orderType === 'delivery') {
-        orderTypeLabel = 'Pesan Antar';
-        metaInfo = deliveryAddress;
-      }
-
       // Kirim data pesanan ke backend API
       const res = await fetch('/api/orders', {
         method: 'POST',
@@ -303,21 +315,44 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
           subtotal: subtotal,
           packaging_fee: packagingFee,
           total: grandTotal,
-          payment_method: paymentMethod === 'qris' ? 'QRIS Instan (AJI STORE)' : paymentMethod === 'tunai' ? 'Kasir Tunai • Menunggu Scan di Kasir' : 'COD Kurir'
+          payment_method: paymentMethodLabel
         })
       });
 
       const json = await res.json();
       const generatedOrderId = json.data?.id || json.data?.order_id || `#${referenceCode}`;
 
-      // Notifikasi real-time lintas tab / window agar dashboard admin langsung mendeteksi pesanan baru
+      // Perbarui stok di localStorage juragan_bakso_custom_menus
+      try {
+        const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+        if (localCustom.length > 0) {
+          const updatedCustom = localCustom.map(m => {
+            const orderedItem = itemsPayload.find(it => (it.id && m.id && it.id === m.id) || it.name === m.name);
+            if (orderedItem) {
+              const newStk = Math.max(0, Number(m.stock || 0) - Number(orderedItem.qty || 1));
+              return {
+                ...m,
+                stock: newStk,
+                is_available: newStk > 0,
+                badge: newStk > 0 ? (newStk <= 5 ? `Menipis (${newStk})` : m.badge) : 'Habis / Sold Out',
+                badge_type: newStk > 0 ? (newStk <= 5 ? 'primary' : m.badge_type) : 'error'
+              };
+            }
+            return m;
+          });
+          localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedCustom));
+        }
+      } catch (e) {}
+
+      // Notifikasi real-time lintas tab / window agar dashboard admin langsung mendeteksi pesanan baru & update stok
       try {
         localStorage.setItem('juragan_bakso_last_order', JSON.stringify({ id: generatedOrderId, time: Date.now() }));
         window.dispatchEvent(new Event('orderCreated'));
+        window.dispatchEvent(new Event('stockUpdated'));
       } catch (e) {}
 
-      // Buat tautan WhatsApp resmi
-      const waMessage = generateWhatsAppMessage();
+      // Buat tautan WhatsApp resmi dengan nomor tiket yang sinkron
+      const waMessage = generateWhatsAppMessage(generatedOrderId);
       const waUrl = `https://api.whatsapp.com/send?phone=6282299548784&text=${encodeURIComponent(waMessage)}`;
 
       // Data lengkap struk pesanan untuk bukti pembayaran resmi customer
@@ -331,7 +366,7 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
         items: itemsPayload,
         packaging_fee: packagingFee,
         total: grandTotal,
-        payment_method: paymentMethod === 'qris' ? 'QRIS Instan (AJI STORE)' : paymentMethod === 'tunai' ? 'Kasir Tunai • Menunggu Scan di Kasir' : 'COD Kurir',
+        payment_method: paymentMethodLabel,
         notes: custNotes || '-'
       };
 
@@ -344,17 +379,18 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
         open: true,
         orderId: generatedOrderId,
         total: grandTotal,
-        paymentMethod: paymentMethod === 'qris' ? 'QRIS Instan (AJI STORE)' : paymentMethod === 'tunai' ? 'Kasir Tunai • Menunggu Scan di Kasir' : 'COD Kurir',
+        paymentMethod: paymentMethodLabel,
         waUrl: waUrl,
         orderData: completedSlip
       });
     } catch (err) {
       console.error('Error submitting order:', err);
       // Fallback tetap buka WhatsApp
-      const waMessage = generateWhatsAppMessage();
+      const fallbackId = `#${referenceCode}`;
+      const waMessage = generateWhatsAppMessage(fallbackId);
       const waUrl = `https://api.whatsapp.com/send?phone=6282299548784&text=${encodeURIComponent(waMessage)}`;
       const fallbackSlip = {
-        id: `#${referenceCode}`,
+        id: fallbackId,
         timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB',
         customer_name: custName,
         customer_phone: custPhone,
@@ -363,14 +399,14 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
         items: itemsPayload,
         packaging_fee: packagingFee,
         total: grandTotal,
-        payment_method: paymentMethod === 'qris' ? 'QRIS Instan (AJI STORE)' : paymentMethod === 'tunai' ? 'Kasir Tunai • Menunggu Scan di Kasir' : 'COD Kurir',
+        payment_method: paymentMethodLabel,
         notes: custNotes || '-'
       };
       setOrderSuccessModal({
         open: true,
-        orderId: `#${referenceCode}`,
+        orderId: fallbackId,
         total: grandTotal,
-        paymentMethod: paymentMethod === 'qris' ? 'QRIS Instan (AJI STORE)' : paymentMethod === 'tunai' ? 'Kasir Tunai • Menunggu Scan di Kasir' : 'COD Kurir',
+        paymentMethod: paymentMethodLabel,
         waUrl: waUrl,
         orderData: fallbackSlip
       });
@@ -1286,8 +1322,8 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
               <div>No Tiket: <strong>{orderSuccessModal.orderData?.id || orderSuccessModal.orderId}</strong></div>
               <div>Waktu   : {orderSuccessModal.orderData?.timestamp || 'Baru Saja'}</div>
               <div>Pemesan : {orderSuccessModal.orderData?.customer_name || custName}</div>
-              <div>Layanan : {orderSuccessModal.orderData?.order_type_label || (deliveryOption === 'dine-in' ? 'Makan di Tempat' : deliveryOption === 'takeaway' ? 'Bungkus' : 'Pesan Antar')}</div>
-              <div>Detail  : {orderSuccessModal.orderData?.order_detail_meta || tableOrAddress}</div>
+              <div>Layanan : {orderSuccessModal.orderData?.order_type_label || (orderType === 'takeaway' ? 'Bungkus' : orderType === 'delivery' ? 'Pesan Antar' : 'Makan di Tempat')}</div>
+              <div>Detail  : {orderSuccessModal.orderData?.order_detail_meta || (orderType === 'takeaway' ? pickupTime : orderType === 'delivery' ? deliveryAddress : tableNo)}</div>
               
               <div style={{ margin: '6px 0', color: '#888' }}>--------------------------------</div>
               

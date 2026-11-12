@@ -38,8 +38,13 @@ export async function GET() {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const current = (await GET()).data || dbFallback.getSettings();
-    const newStatus = body.is_open !== undefined ? Boolean(body.is_open) : !current.is_open;
+    let currentIsOpen = Boolean(dbFallback.getSettings().is_open);
+    const dbRes = await query('SELECT is_open FROM settings WHERE id = 1 LIMIT 1');
+    if (dbRes.isMysql && dbRes.rows && dbRes.rows.length > 0) {
+      currentIsOpen = Boolean(dbRes.rows[0].is_open);
+    }
+
+    const newStatus = body.is_open !== undefined ? Boolean(body.is_open) : !currentIsOpen;
 
     await query('UPDATE settings SET is_open = ? WHERE id = 1', [newStatus]);
     const updated = dbFallback.updateSettings({ is_open: newStatus });

@@ -110,17 +110,19 @@ export default function AdminDashboardPage() {
 
     // Sinkronisasi lintas tab jika ada pesanan baru masuk
     const handleStorageSync = (e) => {
-      if (e.key === 'juragan_bakso_last_order') {
+      if (e.key === 'juragan_bakso_last_order' || e.key === 'juragan_bakso_custom_menus') {
         loadDashboardData();
       }
     };
     window.addEventListener('storage', handleStorageSync);
     window.addEventListener('orderCreated', loadDashboardData);
+    window.addEventListener('stockUpdated', loadDashboardData);
 
     return () => {
       clearInterval(pollInterval);
       window.removeEventListener('storage', handleStorageSync);
       window.removeEventListener('orderCreated', loadDashboardData);
+      window.removeEventListener('stockUpdated', loadDashboardData);
     };
   }, []);
 
@@ -137,7 +139,45 @@ export default function AdminDashboardPage() {
       const mRes = await fetch(`/api/menus?_t=${Date.now()}`, { cache: 'no-store' });
       const mJson = await mRes.json();
       if (mJson.success && mJson.data) {
-        setMenus(mJson.data);
+        let menuList = mJson.data;
+        // Sinkronisasi menu kustom & stok lokal jika Vercel serverless cold-start
+        try {
+          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+          if (localCustom.length > 0) {
+            // Server adalah sumber kebenaran (Source of Truth) untuk stok menu
+            // Perbarui item yang ada di localCustom dengan status & stok aktual dari server
+            const updatedLocal = localCustom.map(lm => {
+              const serverMatch = menuList.find(sm => sm.name === lm.name || sm.id === lm.id);
+              if (serverMatch) {
+                return {
+                  ...lm,
+                  stock: Number(serverMatch.stock || 0),
+                  is_available: Number(serverMatch.stock || 0) > 0,
+                  badge: serverMatch.badge,
+                  badge_type: serverMatch.badge_type,
+                  price: serverMatch.price
+                };
+              }
+              return lm;
+            });
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+
+            // Hanya sertakan menu yang benar-benar belum tercatat di server (menu kustom baru)
+            const missing = updatedLocal.filter(lm => !menuList.some(sm => sm.name === lm.name || sm.id === lm.id));
+            if (missing.length > 0) {
+              menuList = [...menuList, ...missing];
+              // Re-sync otomatis ke serverless memory
+              for (const mm of missing) {
+                await fetch('/api/menus', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(mm)
+                });
+              }
+            }
+          }
+        } catch (storageErr) {}
+        setMenus(menuList);
       }
 
       // 3. Fetch Settings
@@ -309,6 +349,8 @@ ${statusNotes}`
           message: `Sukses! Pembayaran Tunai untuk ${orderId} (${target.customer_name}) sebesar ${formatIDR(target.total)} telah divalidasi LUNAS!`
         });
         setTimeout(() => setCashScanResult({ show: false, success: false, message: '' }), 5000);
+        // Sinkronkan seluruh data dashboard & stok menu
+        loadDashboardData();
       }
     } catch (e) {
       alert('Gagal memvalidasi pembayaran tunai: ' + e.message);
@@ -350,6 +392,8 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         setOrders(orders.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+        // Sinkronkan data dashboard agar stok menu dan rekap status langsung terupdate
+        loadDashboardData();
         
         // Tampilkan toast untuk menawarkan pengiriman notifikasi WhatsApp ke pemesan
         const targetOrder = orders.find(o => o.id === orderId);
@@ -380,8 +424,60 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         setMenus(menus.map(m => m.id === menu.id ? { ...m, stock: newStock, is_available: newStock > 0 } : m));
+        // Perbarui stok di penyimpanan lokal agar tidak hilang saat Vercel cold-start
+        try {
+          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+          const idx = localCustom.findIndex(m => m.name === menu.name || m.id === menu.id);
+          if (idx > -1) {
+            localCustom[idx].stock = newStock;
+            localCustom[idx].is_available = newStock > 0;
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(localCustom));
+          } else {
+            localCustom.push({ ...menu, stock: newStock, is_available: newStock > 0 });
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(localCustom));
+          }
+        } catch (storageErr) {}
       }
     } catch (e) {}
+  };
+
+  // Kompresi dan optimasi gambar otomatis dari kamera HP / file komputer (Direct Device Upload)
+  const compressImageFile = (file) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxDim = 800; // Ukuran optimal untuk gambar kuliner web & mobile
+
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // Hasilkan format JPEG teroptimasi (~35-60KB, tajam dan ringan)
+          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          resolve(compressedDataUrl);
+        };
+        img.onerror = () => resolve(event.target.result);
+        img.src = event.target.result;
+      };
+      reader.onerror = () => resolve('');
+      reader.readAsDataURL(file);
+    });
   };
 
   // Handler Upload Berkas Gambar Menu dari Komputer / HP
@@ -391,31 +487,29 @@ ${statusNotes}`
 
     setUploadingImage(true);
     try {
-      // 1. Coba upload via endpoint /api/upload
-      const fd = new FormData();
-      fd.append('file', file);
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        body: fd
-      });
-      const data = await res.json();
-      if (data.success && data.url) {
-        setFormImage(data.url);
-      } else {
-        // Fallback: konversi langsung ke Data URL
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          setFormImage(event.target.result);
-        };
-        reader.readAsDataURL(file);
+      // 1. Kompresi gambar langsung dari HP / Komputer secara instan (< 60KB)
+      const dataUrl = await compressImageFile(file);
+      if (dataUrl) {
+        setFormImage(dataUrl);
+      }
+
+      // 2. Coba upload via endpoint /api/upload jika lingkungan mendukung penyimpanan disk
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          body: fd
+        });
+        const data = await res.json();
+        if (data.success && data.url) {
+          setFormImage(data.url);
+        }
+      } catch (uploadErr) {
+        // Pada Vercel (read-only filesystem), dataUrl terkompresi langsung digunakan secara mulus
       }
     } catch (err) {
-      console.error('Upload API error, using Data URL fallback:', err);
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setFormImage(event.target.result);
-      };
-      reader.readAsDataURL(file);
+      console.warn('Upload API notice, using direct device image:', err.message);
     } finally {
       setUploadingImage(false);
     }
@@ -473,6 +567,25 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         alert(`Menu "${formName}" berhasil ditambahkan!`);
+        // Simpan backup ke localStorage agar menu kustom tidak hilang saat Vercel serverless cold-start
+        try {
+          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+          const newMenuObj = json.data || {
+            id: Date.now(),
+            name: formName,
+            category: catSlug,
+            category_label: formCat,
+            price: Number(formPrice),
+            stock: Number(formStock),
+            description: formDesc,
+            portion_info: finalPortion,
+            image: finalImage,
+            is_available: Number(formStock) > 0,
+            badge: Number(formStock) > 0 ? 'Tersedia' : 'Habis / Sold Out',
+            badge_type: Number(formStock) > 0 ? 'tertiary' : 'error'
+          };
+          localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify([newMenuObj, ...localCustom.filter(m => m.name !== formName)]));
+        } catch (storageErr) {}
         loadDashboardData();
       }
     } else {
@@ -493,6 +606,25 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         alert(`Menu "${formName}" berhasil diperbarui!`);
+        // Simpan pembaruan ke localStorage
+        try {
+          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+          const updatedLocal = localCustom.map(m => (m.id === menuModal.data.id || m.name === formName) ? {
+            ...m,
+            name: formName,
+            category: catSlug,
+            category_label: formCat,
+            price: Number(formPrice),
+            stock: Number(formStock),
+            description: formDesc,
+            portion_info: finalPortion,
+            image: finalImage,
+            is_available: Number(formStock) > 0,
+            badge: Number(formStock) > 0 ? 'Tersedia' : 'Habis / Sold Out',
+            badge_type: Number(formStock) > 0 ? 'tertiary' : 'error'
+          } : m);
+          localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+        } catch (storageErr) {}
         loadDashboardData();
       }
     }
@@ -509,6 +641,12 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         setMenus(menus.filter(m => m.id !== deleteModal.id));
+        // Hapus juga dari localStorage
+        try {
+          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+          const filtered = localCustom.filter(m => m.id !== deleteModal.id && m.name !== deleteModal.name);
+          localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(filtered));
+        } catch (storageErr) {}
         alert('Menu berhasil dihapus dari sistem kasir.');
       }
     } catch (e) {}
@@ -2063,14 +2201,14 @@ ${statusNotes}`
                   </div>
 
                   <div className="flex flex-col gap-2 flex-1 min-w-0">
-                    {/* Tombol Unggah File Komputer/HP */}
-                    <label className={`cursor-pointer px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all ${
+                    {/* Tombol Unggah File Langsung dari Device (HP/Laptop) */}
+                    <label className={`cursor-pointer px-3.5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all shadow-sm ${
                       uploadingImage 
                         ? 'bg-surface-container-high text-on-surface-variant/50 border-outline-variant/30 cursor-not-allowed'
                         : 'bg-primary text-on-primary border-primary hover:bg-primary-container shadow-xs active:scale-95'
                     }`}>
-                      <span className="material-symbols-outlined text-[16px]">upload_file</span>
-                      <span>{uploadingImage ? 'Mengunggah Foto...' : 'Pilih File Foto dari Komputer'}</span>
+                      <span className="material-symbols-outlined text-[18px]">photo_camera</span>
+                      <span>{uploadingImage ? 'Sedang Memproses Foto...' : 'Pilih Foto dari HP / Laptop'}</span>
                       <input 
                         type="file" 
                         accept="image/*" 
@@ -2080,14 +2218,28 @@ ${statusNotes}`
                       />
                     </label>
 
-                    {/* Input URL Gambar Manual */}
-                    <input 
-                      type="url" 
-                      value={formImage}
-                      onChange={(e) => setFormImage(e.target.value)}
-                      placeholder="Atau tempel URL gambar (https://...)"
-                      className="w-full px-2.5 py-1.5 rounded-lg bg-surface text-on-surface border border-outline-variant/40 text-[11px] focus:ring-1 focus:ring-primary outline-none"
-                    />
+                    <div className="flex items-center justify-between text-[10px] text-on-surface-variant">
+                      <span>✓ Langsung dari galeri/kamera HP &amp; laptop</span>
+                      {formImage && formImage.startsWith('data:image') && (
+                        <span className="text-tertiary font-bold">Tersimpan dari Device</span>
+                      )}
+                    </div>
+
+                    {/* Input URL Gambar Manual (Opsional, Tersembunyi Rapi) */}
+                    <details className="group text-[10px] text-on-surface-variant/80">
+                      <summary className="cursor-pointer hover:text-primary transition-colors select-none font-medium">
+                        Atau tempel link URL foto luar (opsional)
+                      </summary>
+                      <div className="mt-1.5">
+                        <input 
+                          type="url" 
+                          value={formImage}
+                          onChange={(e) => setFormImage(e.target.value)}
+                          placeholder="https://..."
+                          className="w-full px-2.5 py-1.5 rounded-lg bg-surface text-on-surface border border-outline-variant/40 text-[11px] focus:ring-1 focus:ring-primary outline-none"
+                        />
+                      </div>
+                    </details>
                   </div>
                 </div>
 

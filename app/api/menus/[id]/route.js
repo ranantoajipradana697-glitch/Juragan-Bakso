@@ -93,6 +93,7 @@ export async function PUT(request, { params }) {
       if (getRes.rows && getRes.rows.length > 0) {
         updated = getRes.rows[0];
       }
+      dbFallback.updateMenu(menuId, body);
     } else {
       updated = dbFallback.updateMenu(menuId, body);
     }
@@ -119,10 +120,8 @@ export async function DELETE(request, { params }) {
       return NextResponse.json({ success: false, message: 'ID menu tidak valid' }, { status: 400 });
     }
 
-    const dbRes = await query('DELETE FROM menus WHERE id = ?', [menuId]);
-    if (!dbRes.isMysql) {
-      dbFallback.deleteMenu(menuId);
-    }
+    await query('DELETE FROM menus WHERE id = ?', [menuId]);
+    dbFallback.deleteMenu(menuId);
 
     return NextResponse.json({
       success: true,

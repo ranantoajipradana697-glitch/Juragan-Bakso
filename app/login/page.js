@@ -110,6 +110,45 @@ function CustomerLoginForm() {
         setTimeout(() => {
           router.push(target);
         }, 600);
+      } else if (res.status === 404 || (data.message && data.message.includes('belum terdaftar'))) {
+        // Pemulihan Otomatis untuk Vercel Serverless Cold-Start:
+        // Jika container serverless Vercel sempat restart, sinkronkan ulang akun dari penyimpanan lokal
+        try {
+          const registeredUsers = JSON.parse(localStorage.getItem('juragan_bakso_registered_users') || '[]');
+          const matched = registeredUsers.find(u => 
+            (u.identifier === cleanPhone || u.phone === cleanPhone) && u.password === cleanPass
+          );
+          if (matched) {
+            // Daftarkan kembali ke instance serverless Vercel yang baru
+            await fetch('/api/auth/register', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(matched)
+            });
+
+            const activeUserObj = {
+              id: matched.id || Date.now(),
+              identifier: matched.identifier,
+              name: matched.name,
+              phone: matched.phone,
+              role: 'customer'
+            };
+
+            showFeedback(`Selamat datang kembali, ${matched.name}! Mengarahkan ke menu...`, 'bg-tertiary text-on-tertiary font-bold');
+            localStorage.setItem('juragan_bakso_user', JSON.stringify(activeUserObj));
+            sessionStorage.setItem('juragan_bakso_user', JSON.stringify(activeUserObj));
+            window.dispatchEvent(new Event('storage'));
+            window.dispatchEvent(new Event('userSessionChange'));
+
+            const target = redirectParam || '/menu';
+            setTimeout(() => {
+              router.push(target);
+            }, 600);
+            return;
+          }
+        } catch (recoverErr) {}
+
+        showFeedback(data.message || 'Nomor WhatsApp atau kata sandi tidak cocok.', 'bg-error-container text-on-error-container');
       } else {
         showFeedback(data.message || 'Nomor WhatsApp atau kata sandi tidak cocok.', 'bg-error-container text-on-error-container');
       }
@@ -163,6 +202,23 @@ function CustomerLoginForm() {
         // Langsung simpan sesi aktif setelah registrasi berhasil
         localStorage.setItem('juragan_bakso_user', JSON.stringify(data.user));
         sessionStorage.setItem('juragan_bakso_user', JSON.stringify(data.user));
+        
+        // Simpan cadangan data akun di perangkat agar tidak hilang jika Vercel cold-start
+        try {
+          const registeredUsers = JSON.parse(localStorage.getItem('juragan_bakso_registered_users') || '[]');
+          if (!registeredUsers.some(u => u.identifier === cleanPhone || u.phone === cleanPhone)) {
+            registeredUsers.push({
+              id: data.user.id,
+              name: cleanName,
+              phone: cleanPhone,
+              identifier: cleanPhone,
+              password: cleanPass,
+              role: 'customer'
+            });
+            localStorage.setItem('juragan_bakso_registered_users', JSON.stringify(registeredUsers));
+          }
+        } catch (storageErr) {}
+
         window.dispatchEvent(new Event('storage'));
         window.dispatchEvent(new Event('userSessionChange'));
 

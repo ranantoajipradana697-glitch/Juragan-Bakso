@@ -14,11 +14,7 @@ export default function MenuPage() {
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
   
   // Cart State
-  const [cart, setCart] = useState([
-    { name: 'Bakso Urat Granat Jumbo', price: 32000, qty: 1, stock: 24 },
-    { name: 'Bakso Telur Puyuh & Jamur', price: 28000, qty: 1, stock: 15 },
-    { name: 'Pangsit Goreng Renyah (Isi 3)', price: 8000, qty: 1, stock: 45 }
-  ]);
+  const [cart, setCart] = useState([]);
 
   const [toast, setToast] = useState({ show: false, message: '' });
 
@@ -30,7 +26,40 @@ export default function MenuPage() {
       const res = await fetch(url, { cache: 'no-store' });
       const json = await res.json();
       if (json.success && json.data) {
-        setMenus(json.data);
+        let menuList = json.data;
+        // Sinkronisasi menu kustom & stok lokal jika Vercel serverless cold-start
+        try {
+          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+          if (localCustom.length > 0) {
+            // Perbarui localCustom dengan stok & status aktual dari server (Server adalah Source of Truth)
+            const updatedLocal = localCustom.map(lm => {
+              const serverMatch = menuList.find(sm => sm.name === lm.name || sm.id === lm.id);
+              if (serverMatch) {
+                return {
+                  ...lm,
+                  stock: Number(serverMatch.stock || 0),
+                  is_available: Number(serverMatch.stock || 0) > 0,
+                  badge: serverMatch.badge,
+                  badge_type: serverMatch.badge_type,
+                  price: serverMatch.price
+                };
+              }
+              return lm;
+            });
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+
+            // Hanya tambahkan menu yang benar-benar belum tercatat di server
+            const extra = updatedLocal.filter(lm => !menuList.some(sm => sm.name === lm.name || sm.id === lm.id));
+            if (extra.length > 0) {
+              if (cat === 'semua') {
+                menuList = [...menuList, ...extra];
+              } else {
+                menuList = [...menuList, ...extra.filter(m => m.category === cat)];
+              }
+            }
+          }
+        } catch (storageErr) {}
+        setMenus(menuList);
       }
     } catch (e) {
       console.error('Failed to fetch menus:', e);
@@ -64,6 +93,16 @@ export default function MenuPage() {
         setCart(JSON.parse(savedCart));
       }
     } catch (e) {}
+
+    // Sinkronisasi pembaruan stok lintas tab / window
+    const handleSync = () => fetchMenus(category);
+    window.addEventListener('stockUpdated', handleSync);
+    window.addEventListener('orderCreated', handleSync);
+
+    return () => {
+      window.removeEventListener('stockUpdated', handleSync);
+      window.removeEventListener('orderCreated', handleSync);
+    };
   }, []);
 
   const handleCategoryChange = (newCat) => {
@@ -99,11 +138,11 @@ export default function MenuPage() {
   };
 
   const addToCart = (menu) => {
-    if (menu.stock <= 0) {
+    if (menu.stock <= 0 || !menu.is_available) {
       showToast('Maaf, menu ini sedang habis (sold out)');
       return;
     }
-    const idx = cart.findIndex(it => it.name === menu.name);
+    const idx = cart.findIndex(it => (it.id && menu.id && it.id === menu.id) || it.name === menu.name);
     let updated = [...cart];
     if (idx > -1) {
       if (updated[idx].qty < menu.stock) {
@@ -115,6 +154,7 @@ export default function MenuPage() {
       }
     } else {
       updated.push({
+        id: menu.id,
         name: menu.name,
         price: Number(menu.price),
         qty: 1,

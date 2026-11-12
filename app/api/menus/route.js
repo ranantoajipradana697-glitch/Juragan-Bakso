@@ -22,15 +22,31 @@ export async function GET(request) {
 
     const dbRes = await query(sql, params);
     if (dbRes.isMysql && dbRes.rows) {
-      menus = dbRes.rows.map(m => ({
-        ...m,
-        price: Number(m.price),
-        stock: Number(m.stock),
-        portion_info: m.portion_info || '1 Porsi + Kuah Segar',
-        is_available: Boolean(m.is_available)
-      }));
+      menus = dbRes.rows.map(m => {
+        const stk = Number(m.stock || 0);
+        const isAvail = stk > 0 && Boolean(m.is_available);
+        return {
+          ...m,
+          price: Number(m.price),
+          stock: stk,
+          portion_info: m.portion_info || '1 Porsi + Kuah Segar',
+          is_available: isAvail,
+          badge: !isAvail ? 'Habis / Sold Out' : (stk <= 5 ? `Menipis (${stk})` : m.badge || 'Tersedia'),
+          badge_type: !isAvail ? 'error' : (stk <= 5 ? 'primary' : m.badge_type || 'tertiary')
+        };
+      });
     } else {
-      menus = dbFallback.getMenus(category);
+      menus = dbFallback.getMenus(category).map(m => {
+        const stk = Number(m.stock || 0);
+        const isAvail = stk > 0 && Boolean(m.is_available);
+        return {
+          ...m,
+          stock: stk,
+          is_available: isAvail,
+          badge: !isAvail ? 'Habis / Sold Out' : (stk <= 5 ? `Menipis (${stk})` : m.badge || 'Tersedia'),
+          badge_type: !isAvail ? 'error' : (stk <= 5 ? 'primary' : m.badge_type || 'tertiary')
+        };
+      });
     }
 
     return NextResponse.json({

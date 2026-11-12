@@ -119,7 +119,7 @@ export default function AdminDashboardPage() {
 
     // Sinkronisasi lintas tab jika ada pesanan baru masuk
     const handleStorageSync = (e) => {
-      if (e.key === 'juragan_bakso_last_order' || e.key === 'juragan_bakso_custom_menus') {
+      if (e.key === 'juragan_bakso_last_order' || e.key === 'juragan_bakso_custom_menus' || e.key === 'juragan_bakso_orders') {
         loadDashboardData();
       }
     };
@@ -141,7 +141,38 @@ export default function AdminDashboardPage() {
       const ordRes = await fetch(`/api/orders?_t=${Date.now()}`, { cache: 'no-store' });
       const ordJson = await ordRes.json();
       if (ordJson.success && ordJson.data) {
-        setOrders(ordJson.data);
+        let serverOrders = ordJson.data;
+
+        // Proteksi pesanan baru agar tidak hilang saat Vercel serverless cold-start
+        try {
+          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          if (localOrders.length > 0) {
+            // Gabungkan pesanan yang baru masuk di browser lokal namun belum tersinkron di kontainer serverless
+            const missing = localOrders.filter(lo => !serverOrders.some(so => so.id === lo.id));
+            if (missing.length > 0) {
+              serverOrders = [...missing, ...serverOrders];
+              // Sinkronkan ke server secara otomatis di latar belakang
+              for (const mo of missing) {
+                fetch('/api/orders', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(mo)
+                }).catch(() => {});
+              }
+            }
+
+            // Update status pesanan di localOrders jika status di server sudah berubah (misal: dimasak, siap, selesai)
+            const updatedLocal = localOrders.map(lo => {
+              const sm = serverOrders.find(so => so.id === lo.id);
+              return sm ? { ...lo, status: sm.status, payment_method: sm.payment_method } : lo;
+            });
+            localStorage.setItem('juragan_bakso_orders', JSON.stringify(updatedLocal));
+          } else if (serverOrders.length > 0) {
+            localStorage.setItem('juragan_bakso_orders', JSON.stringify(serverOrders));
+          }
+        } catch (storageErr) {}
+
+        setOrders(serverOrders);
       }
 
       // 2. Fetch Menus
@@ -402,6 +433,11 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         setOrders(orders.map(o => o.id === orderId ? { ...o, payment_method: newPaymentMethod, status: nextStatus } : o));
+        try {
+          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          const updated = localOrders.map(o => o.id === orderId ? { ...o, payment_method: newPaymentMethod, status: nextStatus } : o);
+          localStorage.setItem('juragan_bakso_orders', JSON.stringify(updated));
+        } catch (storageErr) {}
         setCashScanResult({
           show: true,
           success: true,
@@ -451,6 +487,11 @@ ${statusNotes}`
       const json = await res.json();
       if (json.success) {
         setOrders(orders.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+        try {
+          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          const updated = localOrders.map(o => o.id === orderId ? { ...o, status: newStatus } : o);
+          localStorage.setItem('juragan_bakso_orders', JSON.stringify(updated));
+        } catch (storageErr) {}
         // Sinkronkan data dashboard agar stok menu dan rekap status langsung terupdate
         loadDashboardData();
         

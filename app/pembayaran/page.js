@@ -345,6 +345,28 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
         }
       } catch (e) {}
 
+      // Simpan pesanan ke localStorage juragan_bakso_orders agar pesanan baru tidak hilang saat Vercel cold-start
+      try {
+        const fullOrderObj = json.data || {
+          id: generatedOrderId,
+          customer_name: custName,
+          customer_phone: custPhone,
+          order_type: orderType,
+          order_type_label: orderTypeLabel,
+          order_detail_meta: metaInfo,
+          notes: custNotes,
+          items: itemsPayload,
+          packaging_fee: packagingFee,
+          total: grandTotal,
+          payment_method: paymentMethodLabel,
+          status: 'baru',
+          timestamp: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB'
+        };
+        const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+        const updatedOrders = [fullOrderObj, ...localOrders.filter(o => o.id !== generatedOrderId)];
+        localStorage.setItem('juragan_bakso_orders', JSON.stringify(updatedOrders));
+      } catch (e) {}
+
       // Notifikasi real-time lintas tab / window agar dashboard admin langsung mendeteksi pesanan baru & update stok
       try {
         localStorage.setItem('juragan_bakso_last_order', JSON.stringify({ id: generatedOrderId, time: Date.now() }));

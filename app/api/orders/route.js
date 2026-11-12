@@ -46,18 +46,33 @@ export async function GET(request) {
             'SELECT menu_name as name, price, qty, subtotal FROM order_items WHERE order_id = ?',
             [ord.id]
           );
+          let formattedTime = 'Baru saja';
+          try {
+            if (ord.created_at) {
+              const d = new Date(ord.created_at);
+              if (!isNaN(d.getTime())) {
+                formattedTime = d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+              }
+            }
+          } catch (e) {}
+
           return {
             ...ord,
             price: Number(ord.total),
             total: Number(ord.total),
             packaging_fee: Number(ord.packaging_fee),
             items: itemRes.rows || [],
-            timestamp: new Date(ord.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB',
+            timestamp: formattedTime,
             time_ago: 'Tersimpan di DB'
           };
         })
       );
       orders = ordersWithItems;
+
+      // Jika di MySQL belum ada pesanan baru, sertakan pesanan dari fallback agar tidak kosong
+      if (orders.length === 0) {
+        orders = dbFallback.getOrders(status);
+      }
     } else {
       orders = dbFallback.getOrders(status);
 
@@ -117,7 +132,7 @@ export async function POST(request) {
 
     let createdOrder = null;
 
-    // Coba simpan ke MySQL jika online
+    // Generate order ID unik
     const countRes = await query('SELECT id FROM orders ORDER BY created_at DESC LIMIT 1');
     let orderNum = 91;
     if (countRes.isMysql && countRes.rows && countRes.rows.length > 0) {
@@ -126,77 +141,68 @@ export async function POST(request) {
         orderNum = Math.max(91, parseInt(match[0], 10) + 1);
       }
     }
-    const orderId = `#BKS-${String(orderNum).padStart(3, '0')}`;
+    const orderId = body.id || `#BKS-${String(orderNum).padStart(3, '0')}`;
 
-    const insertOrderRes = await query(
-      `INSERT INTO orders (id, customer_name, customer_phone, order_type, order_type_label, order_detail_meta, notes, packaging_fee, total, payment_method, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'baru')`,
-      [
-        orderId,
-        customer_name,
-        customer_phone,
-        order_type,
-        order_type_label,
-        order_detail_meta,
-        notes,
-        packaging_fee,
-        total,
-        payment_method
-      ]
-    );
+    // 1. Selalu simpan ke dbFallback agar instan tersedia di memori kontainer
+    const fallbackOrder = dbFallback.addOrder({
+      id: orderId,
+      customer_name,
+      customer_phone,
+      order_type,
+      order_type_label,
+      order_detail_meta,
+      notes,
+      packaging_fee,
+      total,
+      payment_method,
+      items
+    });
 
-    if (insertOrderRes.isMysql) {
-      // Simpan order items & update stok di MySQL
-      for (const it of items) {
-        const itemPrice = Number(it.price) || 0;
-        const itemQty = Number(it.qty) || 1;
-        await query(
-          `INSERT INTO order_items (order_id, menu_name, price, qty, subtotal)
-           VALUES (?, ?, ?, ?, ?)`,
-          [orderId, it.name, itemPrice, itemQty, itemPrice * itemQty]
-        );
-        // Kurangi stok & perbarui ketersediaan jika habis
-        await query(
-          `UPDATE menus 
-           SET stock = GREATEST(0, stock - ?),
-               is_available = (GREATEST(0, stock - ?) > 0),
-               badge = IF(GREATEST(0, stock - ?) <= 0, 'Habis / Sold Out', IF(GREATEST(0, stock - ?) <= 5, CONCAT('Menipis (', GREATEST(0, stock - ?), ')'), badge)),
-               badge_type = IF(GREATEST(0, stock - ?) <= 0, 'error', IF(GREATEST(0, stock - ?) <= 5, 'primary', badge_type))
-           WHERE TRIM(LOWER(name)) = TRIM(LOWER(?)) OR id = ?`,
-          [itemQty, itemQty, itemQty, itemQty, itemQty, itemQty, it.name, it.id || 0]
-        );
+    createdOrder = fallbackOrder;
+
+    // 2. Jika database MySQL aktif, simpan juga secara persisten
+    try {
+      const insertOrderRes = await query(
+        `INSERT INTO orders (id, customer_name, customer_phone, order_type, order_type_label, order_detail_meta, notes, packaging_fee, total, payment_method, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'baru')`,
+        [
+          orderId,
+          customer_name,
+          customer_phone,
+          order_type,
+          order_type_label,
+          order_detail_meta,
+          notes,
+          packaging_fee,
+          total,
+          payment_method
+        ]
+      );
+
+      if (insertOrderRes.isMysql) {
+        // Simpan order items & update stok di MySQL
+        for (const it of items) {
+          const itemPrice = Number(it.price) || 0;
+          const itemQty = Number(it.qty) || 1;
+          await query(
+            `INSERT INTO order_items (order_id, menu_name, price, qty, subtotal)
+             VALUES (?, ?, ?, ?, ?)`,
+            [orderId, it.name, itemPrice, itemQty, itemPrice * itemQty]
+          );
+          // Kurangi stok & perbarui ketersediaan jika habis
+          await query(
+            `UPDATE menus 
+             SET stock = GREATEST(0, stock - ?),
+                 is_available = (GREATEST(0, stock - ?) > 0),
+                 badge = IF(GREATEST(0, stock - ?) <= 0, 'Habis / Sold Out', 'Tersedia'),
+                 badge_type = IF(GREATEST(0, stock - ?) <= 0, 'error', 'tertiary')
+             WHERE TRIM(LOWER(name)) = TRIM(LOWER(?)) OR id = ?`,
+            [itemQty, itemQty, itemQty, itemQty, it.name, it.id || 0]
+          );
+        }
       }
-
-      // Sinkronkan pemotongan stok ke fallback memory store
-      dbFallback.deductStock(items);
-
-      createdOrder = {
-        id: orderId,
-        customer_name,
-        customer_phone,
-        order_type,
-        order_type_label,
-        order_detail_meta,
-        notes,
-        packaging_fee: Number(packaging_fee) || 0,
-        total: Number(total) || 0,
-        items,
-        status: 'baru',
-        timestamp: 'Baru saja'
-      };
-    } else {
-      createdOrder = dbFallback.addOrder({
-        customer_name,
-        customer_phone,
-        order_type,
-        order_type_label,
-        order_detail_meta,
-        notes,
-        packaging_fee,
-        total,
-        payment_method,
-        items
-      });
+    } catch (dbErr) {
+      console.warn('MySQL order insert warning:', dbErr.message);
     }
 
     return NextResponse.json({

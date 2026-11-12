@@ -43,7 +43,17 @@ function PesananContent() {
       const res = await fetch(url, { cache: 'no-store' });
       const json = await res.json();
       if (json.success && json.data) {
-        setOrders(json.data);
+        let orderList = json.data;
+        try {
+          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          if (localOrders.length > 0) {
+            const missing = localOrders.filter(lo => !orderList.some(so => so.id === lo.id));
+            if (missing.length > 0) {
+              orderList = [...missing, ...orderList];
+            }
+          }
+        } catch (storageErr) {}
+        setOrders(orderList);
       }
       setLastUpdated(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB');
       setLoading(false);

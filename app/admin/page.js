@@ -445,39 +445,53 @@ ${statusNotes}`
   // Kompresi dan optimasi gambar otomatis dari kamera HP / file komputer (Direct Device Upload)
   const compressImageFile = (file) => {
     return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
+      try {
+        const objectUrl = URL.createObjectURL(file);
         const img = new Image();
         img.onload = () => {
-          const canvas = document.createElement('canvas');
-          let width = img.width;
-          let height = img.height;
-          const maxDim = 800; // Ukuran optimal untuk gambar kuliner web & mobile
+          try {
+            const canvas = document.createElement('canvas');
+            let width = img.width;
+            let height = img.height;
+            const maxDim = 800; // Ukuran optimal untuk gambar kuliner web & mobile
 
-          if (width > maxDim || height > maxDim) {
-            if (width > height) {
-              height = Math.round((height * maxDim) / width);
-              width = maxDim;
-            } else {
-              width = Math.round((width * maxDim) / height);
-              height = maxDim;
+            if (width > maxDim || height > maxDim) {
+              if (width > height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
             }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+            URL.revokeObjectURL(objectUrl);
+            resolve(compressedDataUrl);
+          } catch (canvasErr) {
+            URL.revokeObjectURL(objectUrl);
+            resolve('');
           }
-
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-
-          // Hasilkan format JPEG teroptimasi (~35-60KB, tajam dan ringan)
-          const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
-          resolve(compressedDataUrl);
         };
-        img.onerror = () => resolve(event.target.result);
-        img.src = event.target.result;
-      };
-      reader.onerror = () => resolve('');
-      reader.readAsDataURL(file);
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target?.result || '');
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(file);
+        };
+        img.src = objectUrl;
+      } catch (e) {
+        const reader = new FileReader();
+        reader.onload = (ev) => resolve(ev.target?.result || '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+      }
     });
   };
 
@@ -492,26 +506,39 @@ ${statusNotes}`
       const dataUrl = await compressImageFile(file);
       if (dataUrl) {
         setFormImage(dataUrl);
-      }
 
-      // 2. Coba upload via endpoint /api/upload jika lingkungan mendukung penyimpanan disk
-      try {
-        const fd = new FormData();
-        fd.append('file', file);
-        const res = await fetch('/api/upload', {
-          method: 'POST',
-          body: fd
-        });
-        const data = await res.json();
-        if (data.success && data.url) {
-          setFormImage(data.url);
+        // 2. Coba upload via endpoint /api/upload dengan file terkompresi (~40KB)
+        // Menghindari upload file mentah kamera HP (10MB-20MB) yang ditolak Vercel (batas 4.5MB)
+        try {
+          const arr = dataUrl.split(',');
+          const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+          const bstr = atob(arr[1]);
+          let n = bstr.length;
+          const u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          const blob = new Blob([u8arr], { type: mime });
+          const compressedFile = new File([blob], (file.name || 'foto-menu').replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' });
+
+          const fd = new FormData();
+          fd.append('file', compressedFile);
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            body: fd
+          });
+          const data = await res.json();
+          if (data.success && data.url) {
+            setFormImage(data.url);
+          }
+        } catch (uploadErr) {
+          // Pada Vercel (read-only filesystem), dataUrl terkompresi langsung digunakan secara mulus
         }
-      } catch (uploadErr) {
-        // Pada Vercel (read-only filesystem), dataUrl terkompresi langsung digunakan secara mulus
       }
     } catch (err) {
-      console.warn('Upload API notice, using direct device image:', err.message);
+      console.warn('Upload notice, using direct device image:', err.message);
     } finally {
+      if (e.target) e.target.value = '';
       setUploadingImage(false);
     }
   };
@@ -2234,7 +2261,7 @@ ${statusNotes}`
 
                   <div className="flex flex-col gap-2 flex-1 min-w-0">
                     {/* Tombol Unggah File Langsung dari Device (HP/Laptop) */}
-                    <label className={`cursor-pointer px-3.5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all shadow-sm ${
+                    <label className={`relative overflow-hidden cursor-pointer px-3.5 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 border transition-all shadow-sm ${
                       uploadingImage 
                         ? 'bg-surface-container-high text-on-surface-variant/50 border-outline-variant/30 cursor-not-allowed'
                         : 'bg-primary text-on-primary border-primary hover:bg-primary-container shadow-xs active:scale-95'
@@ -2245,7 +2272,7 @@ ${statusNotes}`
                         type="file" 
                         accept="image/*" 
                         onChange={handleFileUpload} 
-                        className="hidden" 
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
                         disabled={uploadingImage} 
                       />
                     </label>
@@ -2357,7 +2384,7 @@ ${statusNotes}`
                 />
               </div>
 
-              <div className="pt-3 border-t border-surface-container flex items-center justify-end gap-2">
+              <div className="pt-3 border-t border-surface-container flex items-center justify-end gap-2 sticky bottom-0 bg-surface-container-lowest py-2 z-20">
                 <button 
                   type="button" 
                   onClick={() => setMenuModal({ open: false, mode: 'add', data: null })}

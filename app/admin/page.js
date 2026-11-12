@@ -52,6 +52,14 @@ export default function AdminDashboardPage() {
   const [formImage, setFormImage] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const [submittingMenu, setSubmittingMenu] = useState(false);
+  const [adminToast, setAdminToast] = useState({ show: false, message: '', type: 'success' });
+
+  const showAdminToast = (message, type = 'success') => {
+    setAdminToast({ show: true, message, type });
+    setTimeout(() => {
+      setAdminToast(prev => ({ ...prev, show: false }));
+    }, 4500);
+  };
 
   // Preset foto kuliner siap pakai untuk admin
   const PRESET_IMAGES = [
@@ -141,19 +149,53 @@ export default function AdminDashboardPage() {
       const mJson = await mRes.json();
       if (mJson.success && mJson.data) {
         let menuList = mJson.data;
+        const isFromMysql = mJson.source === 'mysql';
+
         // Sinkronisasi menu kustom & stok lokal jika Vercel serverless cold-start
         try {
           const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
           if (localCustom.length > 0) {
-            // Server adalah sumber kebenaran (Source of Truth) untuk stok menu
-            // Perbarui item yang ada di localCustom dengan status & stok aktual dari server
+            // Lindungi stok dari reset serverless cold-start
             const updatedLocal = localCustom.map(lm => {
               const serverMatch = menuList.find(sm => sm.name === lm.name || sm.id === lm.id);
               if (serverMatch) {
+                // Jika database MySQL aktif dan persisten, MySQL adalah sumber kebenaran utama
+                if (isFromMysql) {
+                  return {
+                    ...lm,
+                    stock: Number(serverMatch.stock || 0),
+                    is_available: Number(serverMatch.stock || 0) > 0,
+                    badge: serverMatch.badge,
+                    badge_type: serverMatch.badge_type,
+                    price: serverMatch.price
+                  };
+                }
+
+                // Jika di Vercel fallback memory (belum terkoneksi ke remote MySQL):
+                const lmStock = Number(lm.stock || 0);
+                const smStock = Number(serverMatch.stock || 0);
+
+                // Jika stok lokal memiliki timestamp modifikasi admin dan berbeda dari server container
+                if (lm.updatedAt && smStock !== lmStock) {
+                  serverMatch.stock = lmStock;
+                  serverMatch.is_available = lmStock > 0;
+                  serverMatch.badge = lm.badge || (lmStock > 0 ? (lmStock <= 5 ? `Menipis (${lmStock})` : 'Tersedia') : 'Habis / Sold Out');
+                  serverMatch.badge_type = lm.badge_type || (lmStock > 0 ? (lmStock <= 5 ? 'primary' : 'tertiary') : 'error');
+
+                  // Sembuhkan container serverless di latar belakang
+                  fetch(`/api/menus/${serverMatch.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stock: lmStock, name: serverMatch.name })
+                  }).catch(() => {});
+
+                  return lm;
+                }
+
                 return {
                   ...lm,
-                  stock: Number(serverMatch.stock || 0),
-                  is_available: Number(serverMatch.stock || 0) > 0,
+                  stock: smStock,
+                  is_available: smStock > 0,
                   badge: serverMatch.badge,
                   badge_type: serverMatch.badge_type,
                   price: serverMatch.price
@@ -161,7 +203,23 @@ export default function AdminDashboardPage() {
               }
               return lm;
             });
+
             localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+
+            // Sinkronkan menuList dengan data yang diproteksi
+            menuList = menuList.map(sm => {
+              const localMatch = updatedLocal.find(lm => lm.name === sm.name || lm.id === sm.id);
+              if (localMatch && localMatch.updatedAt && !isFromMysql) {
+                return {
+                  ...sm,
+                  stock: Number(localMatch.stock || 0),
+                  is_available: Number(localMatch.stock || 0) > 0,
+                  badge: localMatch.badge,
+                  badge_type: localMatch.badge_type
+                };
+              }
+              return sm;
+            });
 
             // Hanya sertakan menu yang benar-benar belum tercatat di server (menu kustom baru)
             const missing = updatedLocal.filter(lm => !menuList.some(sm => sm.name === lm.name || sm.id === lm.id));
@@ -169,11 +227,11 @@ export default function AdminDashboardPage() {
               menuList = [...menuList, ...missing];
               // Re-sync otomatis ke serverless memory
               for (const mm of missing) {
-                await fetch('/api/menus', {
+                fetch('/api/menus', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(mm)
-                });
+                }).catch(() => {});
               }
             }
           }
@@ -416,29 +474,47 @@ ${statusNotes}`
   // Quick Stock Change (+1, +10)
   const quickStockChange = async (menu, delta) => {
     const newStock = Math.max(0, Number(menu.stock) + delta);
+    const isAvail = newStock > 0;
+    const badge = isAvail ? (newStock <= 5 ? `Menipis (${newStock})` : 'Tersedia') : 'Habis / Sold Out';
+    const badgeType = isAvail ? (newStock <= 5 ? 'primary' : 'tertiary') : 'error';
+
+    // 1. Optimistic UI update secara langsung
+    setMenus(prev => prev.map(m => (m.id === menu.id || m.name === menu.name) ? {
+      ...m,
+      stock: newStock,
+      is_available: isAvail,
+      badge,
+      badge_type: badgeType
+    } : m));
+
+    // 2. Kunci dan simpan ke localStorage dengan updatedAt agar tidak tertimpa Vercel cold-start
     try {
-      const res = await fetch(`/api/menus/${menu.id}`, {
+      const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+      const idx = localCustom.findIndex(m => m.name === menu.name || m.id === menu.id);
+      const updatedItem = {
+        ...(idx > -1 ? localCustom[idx] : menu),
+        stock: newStock,
+        is_available: isAvail,
+        badge,
+        badge_type: badgeType,
+        updatedAt: Date.now()
+      };
+      if (idx > -1) {
+        localCustom[idx] = updatedItem;
+      } else {
+        localCustom.push(updatedItem);
+      }
+      localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(localCustom));
+      window.dispatchEvent(new Event('stockUpdated'));
+    } catch (storageErr) {}
+
+    // 3. Kirim update ke API backend
+    try {
+      await fetch(`/api/menus/${menu.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stock: newStock })
+        body: JSON.stringify({ stock: newStock, name: menu.name })
       });
-      const json = await res.json();
-      if (json.success) {
-        setMenus(menus.map(m => m.id === menu.id ? { ...m, stock: newStock, is_available: newStock > 0 } : m));
-        // Perbarui stok di penyimpanan lokal agar tidak hilang saat Vercel cold-start
-        try {
-          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
-          const idx = localCustom.findIndex(m => m.name === menu.name || m.id === menu.id);
-          if (idx > -1) {
-            localCustom[idx].stock = newStock;
-            localCustom[idx].is_available = newStock > 0;
-            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(localCustom));
-          } else {
-            localCustom.push({ ...menu, stock: newStock, is_available: newStock > 0 });
-            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(localCustom));
-          }
-        } catch (storageErr) {}
-      }
     } catch (e) {}
   };
 
@@ -453,7 +529,7 @@ ${statusNotes}`
             const canvas = document.createElement('canvas');
             let width = img.width;
             let height = img.height;
-            const maxDim = 800; // Ukuran optimal untuk gambar kuliner web & mobile
+            const maxDim = 500; // Ukuran optimal untuk kartu menu HP & Desktop (< 35KB)
 
             if (width > maxDim || height > maxDim) {
               if (width > height) {
@@ -470,9 +546,14 @@ ${statusNotes}`
             const ctx = canvas.getContext('2d');
             ctx.drawImage(img, 0, 0, width, height);
 
-            const compressedDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+            let compressed = canvas.toDataURL('image/jpeg', 0.65);
+            // Jika ukuran string masih di atas 45.000 karakter, kurangi lagi kualitasnya
+            if (compressed.length > 45000) {
+              compressed = canvas.toDataURL('image/jpeg', 0.45);
+            }
+
             URL.revokeObjectURL(objectUrl);
-            resolve(compressedDataUrl);
+            resolve(compressed);
           } catch (canvasErr) {
             URL.revokeObjectURL(objectUrl);
             resolve('');
@@ -480,17 +561,19 @@ ${statusNotes}`
         };
         img.onerror = () => {
           URL.revokeObjectURL(objectUrl);
+          // Coba fallback dengan FileReader
           const reader = new FileReader();
-          reader.onload = (e) => resolve(e.target?.result || '');
+          reader.onload = (e) => {
+            const res = e.target?.result || '';
+            // Jangan loloskan jika ukuran data mentah > 60KB (agar tidak melampaui limit kolom database)
+            resolve(res.length <= 60000 ? res : '');
+          };
           reader.onerror = () => resolve('');
           reader.readAsDataURL(file);
         };
         img.src = objectUrl;
       } catch (e) {
-        const reader = new FileReader();
-        reader.onload = (ev) => resolve(ev.target?.result || '');
-        reader.onerror = () => resolve('');
-        reader.readAsDataURL(file);
+        resolve('');
       }
     });
   };
@@ -502,41 +585,16 @@ ${statusNotes}`
 
     setUploadingImage(true);
     try {
-      // 1. Kompresi gambar langsung dari HP / Komputer secara instan (< 60KB)
+      // 1. Kompresi gambar langsung dari HP secara instan (< 35KB)
       const dataUrl = await compressImageFile(file);
-      if (dataUrl) {
+      if (dataUrl && dataUrl.startsWith('data:image')) {
         setFormImage(dataUrl);
-
-        // 2. Coba upload via endpoint /api/upload dengan file terkompresi (~40KB)
-        // Menghindari upload file mentah kamera HP (10MB-20MB) yang ditolak Vercel (batas 4.5MB)
-        try {
-          const arr = dataUrl.split(',');
-          const mime = arr[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
-          const bstr = atob(arr[1]);
-          let n = bstr.length;
-          const u8arr = new Uint8Array(n);
-          while (n--) {
-            u8arr[n] = bstr.charCodeAt(n);
-          }
-          const blob = new Blob([u8arr], { type: mime });
-          const compressedFile = new File([blob], (file.name || 'foto-menu').replace(/\.[^/.]+$/, "") + ".jpg", { type: 'image/jpeg' });
-
-          const fd = new FormData();
-          fd.append('file', compressedFile);
-          const res = await fetch('/api/upload', {
-            method: 'POST',
-            body: fd
-          });
-          const data = await res.json();
-          if (data.success && data.url) {
-            setFormImage(data.url);
-          }
-        } catch (uploadErr) {
-          // Pada Vercel (read-only filesystem), dataUrl terkompresi langsung digunakan secara mulus
-        }
+        showAdminToast('Foto berhasil dimuat & dioptimasi langsung dari perangkat!', 'success');
+      } else {
+        showAdminToast('Foto terlalu besar atau format belum didukung. Silakan gunakan foto JPG/PNG lain.', 'error');
       }
     } catch (err) {
-      console.warn('Upload notice, using direct device image:', err.message);
+      showAdminToast('Gagal memproses foto: ' + err.message, 'error');
     } finally {
       if (e.target) e.target.value = '';
       setUploadingImage(false);
@@ -570,16 +628,19 @@ ${statusNotes}`
   const handleMenuSubmit = async (e) => {
     if (e && e.preventDefault) e.preventDefault();
 
-    if (!formName || !formName.trim()) {
-      alert('Nama menu kuliner wajib diisi!');
+    const cleanName = (formName || '').trim();
+    if (!cleanName) {
+      showAdminToast('Nama menu kuliner wajib diisi!', 'error');
       return;
     }
-    if (formPrice === '' || isNaN(Number(formPrice)) || Number(formPrice) < 0) {
-      alert('Harga menu tidak valid. Mohon isi angka yang benar!');
+    const priceNum = Number(formPrice);
+    if (isNaN(priceNum) || priceNum < 0) {
+      showAdminToast('Harga menu tidak valid. Mohon isi angka!', 'error');
       return;
     }
-    if (formStock === '' || isNaN(Number(formStock)) || Number(formStock) < 0) {
-      alert('Stok porsi menu tidak valid. Mohon isi angka yang benar!');
+    const stockNum = Number(formStock);
+    if (isNaN(stockNum) || stockNum < 0) {
+      showAdminToast('Stok porsi tidak valid. Mohon isi angka!', 'error');
       return;
     }
 
@@ -592,99 +653,95 @@ ${statusNotes}`
       else if (formCat.includes('Minuman')) catSlug = 'minuman';
 
       const finalImage = formImage || PRESET_IMAGES[0].url;
-      const finalPortion = formPortion || '1 Porsi + Kuah Segar';
+      const finalPortion = (formPortion || '1 Porsi + Kuah Segar').trim();
+
+      const payload = {
+        name: cleanName,
+        category: catSlug,
+        category_label: formCat,
+        price: priceNum,
+        stock: stockNum,
+        description: (formDesc || '').trim(),
+        portion_info: finalPortion,
+        image: finalImage
+      };
 
       if (menuModal.mode === 'add') {
         const res = await fetch('/api/menus', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: formName.trim(),
-            category: catSlug,
-            category_label: formCat,
-            price: Number(formPrice),
-            stock: Number(formStock),
-            description: formDesc.trim(),
-            portion_info: finalPortion.trim(),
-            image: finalImage
-          })
+          body: JSON.stringify(payload)
         });
         const json = await res.json();
         if (json.success) {
-          // Simpan backup ke localStorage agar menu kustom tidak hilang saat Vercel serverless cold-start
+          // Backup menu baru ke localStorage agar tidak hilang saat Vercel serverless cold-start
           try {
             const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
             const newMenuObj = json.data || {
               id: Date.now(),
-              name: formName.trim(),
-              category: catSlug,
-              category_label: formCat,
-              price: Number(formPrice),
-              stock: Number(formStock),
-              description: formDesc.trim(),
-              portion_info: finalPortion.trim(),
-              image: finalImage,
-              is_available: Number(formStock) > 0,
-              badge: Number(formStock) > 0 ? (Number(formStock) <= 5 ? `Menipis (${formStock})` : 'Tersedia') : 'Habis / Sold Out',
-              badge_type: Number(formStock) > 0 ? (Number(formStock) <= 5 ? 'primary' : 'tertiary') : 'error'
+              ...payload,
+              is_available: stockNum > 0,
+              badge: stockNum > 0 ? (stockNum <= 5 ? `Menipis (${stockNum})` : 'Tersedia') : 'Habis / Sold Out',
+              badge_type: stockNum > 0 ? (stockNum <= 5 ? 'primary' : 'tertiary') : 'error'
             };
-            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify([newMenuObj, ...localCustom.filter(m => m.name !== formName.trim())]));
+            const withTimestamp = { ...newMenuObj, updatedAt: Date.now() };
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify([withTimestamp, ...localCustom.filter(m => m.name !== cleanName)]));
             window.dispatchEvent(new Event('stockUpdated'));
           } catch (storageErr) {}
 
-          await loadDashboardData();
+          // Tutup modal SEGERA agar pengguna langsung melihat hasil di layar HP
           setMenuModal({ open: false, mode: 'add', data: null });
-          alert(`Sukses! Menu "${formName.trim()}" berhasil ditambahkan ke sistem.`);
+          showAdminToast(`Sukses! Menu "${cleanName}" berhasil ditambahkan.`, 'success');
+          loadDashboardData();
         } else {
-          alert('Gagal menambahkan menu: ' + (json.message || 'Terjadi kesalahan sistem'));
+          showAdminToast('Gagal menambahkan menu: ' + (json.message || 'Terjadi kesalahan sistem'), 'error');
         }
       } else {
         const res = await fetch(`/api/menus/${menuModal.data.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: formName.trim(),
-            category: catSlug,
-            category_label: formCat,
-            price: Number(formPrice),
-            stock: Number(formStock),
-            description: formDesc.trim(),
-            portion_info: finalPortion.trim(),
-            image: finalImage
-          })
+          body: JSON.stringify(payload)
         });
         const json = await res.json();
         if (json.success) {
-          // Simpan pembaruan ke localStorage
+          const isAvail = stockNum > 0;
+          const badge = isAvail ? (stockNum <= 5 ? `Menipis (${stockNum})` : 'Tersedia') : 'Habis / Sold Out';
+          const badgeType = isAvail ? (stockNum <= 5 ? 'primary' : 'tertiary') : 'error';
+          const updatedMenuData = {
+            ...menuModal.data,
+            ...payload,
+            stock: stockNum,
+            is_available: isAvail,
+            badge,
+            badge_type: badgeType,
+            updatedAt: Date.now()
+          };
+
+          // Optimistic UI update secara langsung
+          setMenus(prev => prev.map(m => (m.id === menuModal.data.id || m.name === cleanName) ? updatedMenuData : m));
+
+          // Simpan pembaruan ke localStorage (kunci dengan updatedAt agar tahan banting di Vercel cold-start)
           try {
             const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
-            const updatedLocal = localCustom.map(m => (m.id === menuModal.data.id || m.name === formName.trim()) ? {
-              ...m,
-              name: formName.trim(),
-              category: catSlug,
-              category_label: formCat,
-              price: Number(formPrice),
-              stock: Number(formStock),
-              description: formDesc.trim(),
-              portion_info: finalPortion.trim(),
-              image: finalImage,
-              is_available: Number(formStock) > 0,
-              badge: Number(formStock) > 0 ? (Number(formStock) <= 5 ? `Menipis (${formStock})` : 'Tersedia') : 'Habis / Sold Out',
-              badge_type: Number(formStock) > 0 ? (Number(formStock) <= 5 ? 'primary' : 'tertiary') : 'error'
-            } : m);
-            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+            const idx = localCustom.findIndex(m => m.id === menuModal.data.id || m.name === cleanName);
+            if (idx > -1) {
+              localCustom[idx] = { ...localCustom[idx], ...updatedMenuData };
+            } else {
+              localCustom.push(updatedMenuData);
+            }
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(localCustom));
             window.dispatchEvent(new Event('stockUpdated'));
           } catch (storageErr) {}
 
-          await loadDashboardData();
           setMenuModal({ open: false, mode: 'add', data: null });
-          alert(`Sukses! Menu "${formName.trim()}" berhasil diperbarui.`);
+          showAdminToast(`Sukses! Menu "${cleanName}" berhasil diperbarui.`, 'success');
+          loadDashboardData();
         } else {
-          alert('Gagal memperbarui menu: ' + (json.message || 'Terjadi kesalahan sistem'));
+          showAdminToast('Gagal memperbarui menu: ' + (json.message || 'Terjadi kesalahan sistem'), 'error');
         }
       }
     } catch (err) {
-      alert('Terjadi kesalahan saat memproses menu: ' + err.message);
+      showAdminToast('Terjadi kendala jaringan: ' + err.message, 'error');
     } finally {
       setSubmittingMenu(false);
     }
@@ -2144,11 +2201,32 @@ ${statusNotes}`
         </main>
       </div>
 
+      {/* Floating In-App Toast Notification (Mobile & Desktop) */}
+      {adminToast.show && (
+        <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[100] px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2.5 text-xs font-bold animate-in fade-in slide-in-from-top-4 duration-200 border max-w-[90vw] ${
+          adminToast.type === 'error' 
+            ? 'bg-red-700 text-white border-red-800 shadow-red-950/20' 
+            : 'bg-emerald-700 text-white border-emerald-600 shadow-emerald-950/20'
+        }`}>
+          <span className="material-symbols-outlined text-[18px]">
+            {adminToast.type === 'error' ? 'error' : 'check_circle'}
+          </span>
+          <span className="leading-snug">{adminToast.message}</span>
+          <button 
+            type="button" 
+            onClick={() => setAdminToast(prev => ({ ...prev, show: false }))}
+            className="ml-2 text-white/70 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* MODAL ADD / EDIT MENU */}
       {menuModal.open && (
-        <div className="fixed inset-0 z-50 bg-inverse-surface/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-surface-container-lowest max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-outline-variant/30">
-            <div className="p-4 bg-surface-container-high flex items-center justify-between border-b border-surface-container">
+        <div className="fixed inset-0 z-50 bg-inverse-surface/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-surface-container-lowest max-w-lg w-full rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] border border-outline-variant/30">
+            <div className="p-4 bg-surface-container-high flex items-center justify-between border-b border-surface-container shrink-0">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-lg bg-primary text-on-primary flex items-center justify-center">
                   <span className="material-symbols-outlined text-[18px]">restaurant_menu</span>
@@ -2158,6 +2236,7 @@ ${statusNotes}`
                 </span>
               </div>
               <button 
+                type="button"
                 onClick={() => setMenuModal({ open: false, mode: 'add', data: null })}
                 className="w-8 h-8 rounded-full bg-surface-container text-on-surface hover:bg-surface-dim flex items-center justify-center"
               >
@@ -2165,7 +2244,11 @@ ${statusNotes}`
               </button>
             </div>
 
-            <form noValidate onSubmit={handleMenuSubmit} className="p-5 flex flex-col gap-3 overflow-y-auto">
+            <form 
+              noValidate 
+              onSubmit={(e) => { e.preventDefault(); handleMenuSubmit(e); }} 
+              className="p-4 sm:p-5 flex flex-col gap-3.5 overflow-y-auto flex-1 overscroll-contain"
+            >
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-bold text-on-surface">Nama Menu</label>
                 <input 
@@ -2383,35 +2466,36 @@ ${statusNotes}`
                   rows={2}
                 />
               </div>
-
-              <div className="pt-3 border-t border-surface-container flex items-center justify-end gap-2 sticky bottom-0 bg-surface-container-lowest py-2 z-20">
-                <button 
-                  type="button" 
-                  onClick={() => setMenuModal({ open: false, mode: 'add', data: null })}
-                  className="px-4 py-2 rounded-xl bg-surface-container text-on-surface text-xs font-semibold"
-                >
-                  Batal
-                </button>
-                <button 
-                  type="submit" 
-                  onClick={handleMenuSubmit}
-                  disabled={submittingMenu}
-                  className="px-5 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold hover:bg-primary-container shadow-md flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-95 transition-all"
-                >
-                  {submittingMenu ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>Menyimpan...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined text-[16px]">save</span>
-                      <span>Simpan Menu</span>
-                    </>
-                  )}
-                </button>
-              </div>
             </form>
+
+            {/* Pinned Bottom Footer (Selalu terlihat & mudah diklik di layar HP) */}
+            <div className="p-3.5 sm:p-4 bg-surface-container-high/80 border-t border-surface-container flex items-center justify-end gap-2 shrink-0 z-10">
+              <button 
+                type="button" 
+                onClick={() => setMenuModal({ open: false, mode: 'add', data: null })}
+                className="px-4 py-2.5 rounded-xl bg-surface-container text-on-surface text-xs font-semibold hover:bg-surface-dim active:scale-95 transition-all"
+              >
+                Batal
+              </button>
+              <button 
+                type="button" 
+                onClick={handleMenuSubmit}
+                disabled={submittingMenu || uploadingImage}
+                className="px-5 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold hover:bg-primary-container shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50 active:scale-95 transition-all cursor-pointer"
+              >
+                {submittingMenu ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Menyimpan...</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="material-symbols-outlined text-[16px]">save</span>
+                    <span>Simpan Menu</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

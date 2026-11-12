@@ -27,18 +27,42 @@ export default function MenuPage() {
       const json = await res.json();
       if (json.success && json.data) {
         let menuList = json.data;
+        const isFromMysql = json.source === 'mysql';
+
         // Sinkronisasi menu kustom & stok lokal jika Vercel serverless cold-start
         try {
           const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
           if (localCustom.length > 0) {
-            // Perbarui localCustom dengan stok & status aktual dari server (Server adalah Source of Truth)
+            // Lindungi stok dari reset serverless cold-start
             const updatedLocal = localCustom.map(lm => {
               const serverMatch = menuList.find(sm => sm.name === lm.name || sm.id === lm.id);
               if (serverMatch) {
+                if (isFromMysql) {
+                  return {
+                    ...lm,
+                    stock: Number(serverMatch.stock || 0),
+                    is_available: Number(serverMatch.stock || 0) > 0,
+                    badge: serverMatch.badge,
+                    badge_type: serverMatch.badge_type,
+                    price: serverMatch.price
+                  };
+                }
+
+                const lmStock = Number(lm.stock || 0);
+                const smStock = Number(serverMatch.stock || 0);
+
+                if (lm.updatedAt && smStock !== lmStock) {
+                  serverMatch.stock = lmStock;
+                  serverMatch.is_available = lmStock > 0;
+                  serverMatch.badge = lm.badge || (lmStock > 0 ? (lmStock <= 5 ? `Menipis (${lmStock})` : 'Tersedia') : 'Habis / Sold Out');
+                  serverMatch.badge_type = lm.badge_type || (lmStock > 0 ? (lmStock <= 5 ? 'primary' : 'tertiary') : 'error');
+                  return lm;
+                }
+
                 return {
                   ...lm,
-                  stock: Number(serverMatch.stock || 0),
-                  is_available: Number(serverMatch.stock || 0) > 0,
+                  stock: smStock,
+                  is_available: smStock > 0,
                   badge: serverMatch.badge,
                   badge_type: serverMatch.badge_type,
                   price: serverMatch.price
@@ -46,7 +70,23 @@ export default function MenuPage() {
               }
               return lm;
             });
+
             localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+
+            // Sinkronkan menuList dengan data lokal yang diproteksi
+            menuList = menuList.map(sm => {
+              const localMatch = updatedLocal.find(lm => lm.name === sm.name || lm.id === sm.id);
+              if (localMatch && localMatch.updatedAt && !isFromMysql) {
+                return {
+                  ...sm,
+                  stock: Number(localMatch.stock || 0),
+                  is_available: Number(localMatch.stock || 0) > 0,
+                  badge: localMatch.badge,
+                  badge_type: localMatch.badge_type
+                };
+              }
+              return sm;
+            });
 
             // Hanya tambahkan menu yang benar-benar belum tercatat di server
             const extra = updatedLocal.filter(lm => !menuList.some(sm => sm.name === lm.name || sm.id === lm.id));

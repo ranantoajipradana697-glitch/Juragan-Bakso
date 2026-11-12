@@ -335,7 +335,8 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
                 stock: newStk,
                 is_available: newStk > 0,
                 badge: newStk > 0 ? (newStk <= 5 ? `Menipis (${newStk})` : m.badge) : 'Habis / Sold Out',
-                badge_type: newStk > 0 ? (newStk <= 5 ? 'primary' : m.badge_type) : 'error'
+                badge_type: newStk > 0 ? (newStk <= 5 ? 'primary' : m.badge_type) : 'error',
+                updatedAt: Date.now()
               };
             }
             return m;

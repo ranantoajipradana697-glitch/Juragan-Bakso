@@ -51,6 +51,7 @@ export default function AdminDashboardPage() {
   const [formPortion, setFormPortion] = useState('1 Porsi + Kuah Segar');
   const [formImage, setFormImage] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [submittingMenu, setSubmittingMenu] = useState(false);
 
   // Preset foto kuliner siap pakai untuk admin
   const PRESET_IMAGES = [
@@ -540,95 +541,126 @@ ${statusNotes}`
 
   // Submit Menu (POST or PUT)
   const handleMenuSubmit = async (e) => {
-    e.preventDefault();
-    let catSlug = 'bakso-kuah';
-    if (formCat.includes('Mie')) catSlug = 'mie-bihun';
-    else if (formCat.includes('Pelengkap')) catSlug = 'pelengkap';
-    else if (formCat.includes('Minuman')) catSlug = 'minuman';
+    if (e && e.preventDefault) e.preventDefault();
 
-    const finalImage = formImage || PRESET_IMAGES[0].url;
-    const finalPortion = formPortion || '1 Porsi + Kuah Segar';
-
-    if (menuModal.mode === 'add') {
-      const res = await fetch('/api/menus', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formName,
-          category: catSlug,
-          category_label: formCat,
-          price: Number(formPrice),
-          stock: Number(formStock),
-          description: formDesc,
-          portion_info: finalPortion,
-          image: finalImage
-        })
-      });
-      const json = await res.json();
-      if (json.success) {
-        alert(`Menu "${formName}" berhasil ditambahkan!`);
-        // Simpan backup ke localStorage agar menu kustom tidak hilang saat Vercel serverless cold-start
-        try {
-          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
-          const newMenuObj = json.data || {
-            id: Date.now(),
-            name: formName,
-            category: catSlug,
-            category_label: formCat,
-            price: Number(formPrice),
-            stock: Number(formStock),
-            description: formDesc,
-            portion_info: finalPortion,
-            image: finalImage,
-            is_available: Number(formStock) > 0,
-            badge: Number(formStock) > 0 ? 'Tersedia' : 'Habis / Sold Out',
-            badge_type: Number(formStock) > 0 ? 'tertiary' : 'error'
-          };
-          localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify([newMenuObj, ...localCustom.filter(m => m.name !== formName)]));
-        } catch (storageErr) {}
-        loadDashboardData();
-      }
-    } else {
-      const res = await fetch(`/api/menus/${menuModal.data.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formName,
-          category: catSlug,
-          category_label: formCat,
-          price: Number(formPrice),
-          stock: Number(formStock),
-          description: formDesc,
-          portion_info: finalPortion,
-          image: finalImage
-        })
-      });
-      const json = await res.json();
-      if (json.success) {
-        alert(`Menu "${formName}" berhasil diperbarui!`);
-        // Simpan pembaruan ke localStorage
-        try {
-          const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
-          const updatedLocal = localCustom.map(m => (m.id === menuModal.data.id || m.name === formName) ? {
-            ...m,
-            name: formName,
-            category: catSlug,
-            category_label: formCat,
-            price: Number(formPrice),
-            stock: Number(formStock),
-            description: formDesc,
-            portion_info: finalPortion,
-            image: finalImage,
-            is_available: Number(formStock) > 0,
-            badge: Number(formStock) > 0 ? 'Tersedia' : 'Habis / Sold Out',
-            badge_type: Number(formStock) > 0 ? 'tertiary' : 'error'
-          } : m);
-          localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
-        } catch (storageErr) {}
-        loadDashboardData();
-      }
+    if (!formName || !formName.trim()) {
+      alert('Nama menu kuliner wajib diisi!');
+      return;
     }
-    setMenuModal({ open: false, mode: 'add', data: null });
+    if (formPrice === '' || isNaN(Number(formPrice)) || Number(formPrice) < 0) {
+      alert('Harga menu tidak valid. Mohon isi angka yang benar!');
+      return;
+    }
+    if (formStock === '' || isNaN(Number(formStock)) || Number(formStock) < 0) {
+      alert('Stok porsi menu tidak valid. Mohon isi angka yang benar!');
+      return;
+    }
+
+    setSubmittingMenu(true);
+
+    try {
+      let catSlug = 'bakso-kuah';
+      if (formCat.includes('Mie')) catSlug = 'mie-bihun';
+      else if (formCat.includes('Pelengkap')) catSlug = 'pelengkap';
+      else if (formCat.includes('Minuman')) catSlug = 'minuman';
+
+      const finalImage = formImage || PRESET_IMAGES[0].url;
+      const finalPortion = formPortion || '1 Porsi + Kuah Segar';
+
+      if (menuModal.mode === 'add') {
+        const res = await fetch('/api/menus', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: formName.trim(),
+            category: catSlug,
+            category_label: formCat,
+            price: Number(formPrice),
+            stock: Number(formStock),
+            description: formDesc.trim(),
+            portion_info: finalPortion.trim(),
+            image: finalImage
+          })
+        });
+        const json = await res.json();
+        if (json.success) {
+          // Simpan backup ke localStorage agar menu kustom tidak hilang saat Vercel serverless cold-start
+          try {
+            const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+            const newMenuObj = json.data || {
+              id: Date.now(),
+              name: formName.trim(),
+              category: catSlug,
+              category_label: formCat,
+              price: Number(formPrice),
+              stock: Number(formStock),
+              description: formDesc.trim(),
+              portion_info: finalPortion.trim(),
+              image: finalImage,
+              is_available: Number(formStock) > 0,
+              badge: Number(formStock) > 0 ? (Number(formStock) <= 5 ? `Menipis (${formStock})` : 'Tersedia') : 'Habis / Sold Out',
+              badge_type: Number(formStock) > 0 ? (Number(formStock) <= 5 ? 'primary' : 'tertiary') : 'error'
+            };
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify([newMenuObj, ...localCustom.filter(m => m.name !== formName.trim())]));
+            window.dispatchEvent(new Event('stockUpdated'));
+          } catch (storageErr) {}
+
+          await loadDashboardData();
+          setMenuModal({ open: false, mode: 'add', data: null });
+          alert(`Sukses! Menu "${formName.trim()}" berhasil ditambahkan ke sistem.`);
+        } else {
+          alert('Gagal menambahkan menu: ' + (json.message || 'Terjadi kesalahan sistem'));
+        }
+      } else {
+        const res = await fetch(`/api/menus/${menuModal.data.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: formName.trim(),
+            category: catSlug,
+            category_label: formCat,
+            price: Number(formPrice),
+            stock: Number(formStock),
+            description: formDesc.trim(),
+            portion_info: finalPortion.trim(),
+            image: finalImage
+          })
+        });
+        const json = await res.json();
+        if (json.success) {
+          // Simpan pembaruan ke localStorage
+          try {
+            const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
+            const updatedLocal = localCustom.map(m => (m.id === menuModal.data.id || m.name === formName.trim()) ? {
+              ...m,
+              name: formName.trim(),
+              category: catSlug,
+              category_label: formCat,
+              price: Number(formPrice),
+              stock: Number(formStock),
+              description: formDesc.trim(),
+              portion_info: finalPortion.trim(),
+              image: finalImage,
+              is_available: Number(formStock) > 0,
+              badge: Number(formStock) > 0 ? (Number(formStock) <= 5 ? `Menipis (${formStock})` : 'Tersedia') : 'Habis / Sold Out',
+              badge_type: Number(formStock) > 0 ? (Number(formStock) <= 5 ? 'primary' : 'tertiary') : 'error'
+            } : m);
+            localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
+            window.dispatchEvent(new Event('stockUpdated'));
+          } catch (storageErr) {}
+
+          await loadDashboardData();
+          setMenuModal({ open: false, mode: 'add', data: null });
+          alert(`Sukses! Menu "${formName.trim()}" berhasil diperbarui.`);
+        } else {
+          alert('Gagal memperbarui menu: ' + (json.message || 'Terjadi kesalahan sistem'));
+        }
+      }
+    } catch (err) {
+      alert('Terjadi kesalahan saat memproses menu: ' + err.message);
+    } finally {
+      setSubmittingMenu(false);
+    }
   };
 
   // Delete Menu (DELETE)
@@ -2106,7 +2138,7 @@ ${statusNotes}`
               </button>
             </div>
 
-            <form onSubmit={handleMenuSubmit} className="p-5 flex flex-col gap-3 overflow-y-auto">
+            <form noValidate onSubmit={handleMenuSubmit} className="p-5 flex flex-col gap-3 overflow-y-auto">
               <div className="flex flex-col gap-1">
                 <label className="text-xs font-bold text-on-surface">Nama Menu</label>
                 <input 
@@ -2232,7 +2264,7 @@ ${statusNotes}`
                       </summary>
                       <div className="mt-1.5">
                         <input 
-                          type="url" 
+                          type="text" 
                           value={formImage}
                           onChange={(e) => setFormImage(e.target.value)}
                           placeholder="https://..."
@@ -2335,9 +2367,21 @@ ${statusNotes}`
                 </button>
                 <button 
                   type="submit" 
-                  className="px-5 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold hover:bg-primary-container shadow-md"
+                  onClick={handleMenuSubmit}
+                  disabled={submittingMenu}
+                  className="px-5 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold hover:bg-primary-container shadow-md flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-95 transition-all"
                 >
-                  Simpan Menu
+                  {submittingMenu ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Menyimpan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-[16px]">save</span>
+                      <span>Simpan Menu</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

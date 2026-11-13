@@ -172,6 +172,13 @@ export default function AdminDashboardPage() {
           }
         } catch (storageErr) {}
 
+        // Pastikan urutan pesanan dari ID nomor tertinggi (terbaru) selalu paling atas
+        serverOrders.sort((a, b) => {
+          const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
+          const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
+          return numB - numA;
+        });
+
         setOrders(serverOrders);
       }
 

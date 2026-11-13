@@ -34,5 +34,14 @@
     "name": "aji",
     "phone": "0812345678",
     "pin": null
+  },
+  {
+    "id": 5,
+    "identifier": "08131313",
+    "password": "123456",
+    "role": "customer",
+    "name": "Wibowo Agung",
+    "phone": "08131313",
+    "pin": null
   }
 ]

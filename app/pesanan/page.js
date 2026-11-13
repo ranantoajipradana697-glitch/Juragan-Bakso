@@ -43,7 +43,24 @@ function PesananContent() {
       const res = await fetch(url, { cache: 'no-store' });
       const json = await res.json();
       if (json.success && json.data) {
-        setOrders(json.data);
+        let serverList = json.data;
+        try {
+          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          if (localOrders.length > 0) {
+            const missing = localOrders.filter(lo => !serverList.some(so => so.id === lo.id));
+            if (missing.length > 0) {
+              serverList = [...missing, ...serverList];
+            }
+          }
+        } catch (e) {}
+
+        serverList.sort((a, b) => {
+          const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
+          const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
+          return numB - numA;
+        });
+
+        setOrders(serverList);
       }
       setLastUpdated(new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB');
       setLoading(false);

@@ -93,12 +93,7 @@ export async function GET(request) {
         }
       }
 
-      // Urutkan pesanan terbaru di paling atas berdasarkan nomor ID
-      orders.sort((a, b) => {
-        const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
-        const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
-        return numB - numA;
-      });
+      // Selesai MySQL branch
     } else {
       orders = dbFallback.getOrders(status);
 
@@ -121,6 +116,13 @@ export async function GET(request) {
         });
       }
     }
+
+    // Urutkan pesanan terbaru di paling atas berdasarkan nomor ID untuk semua sumber
+    orders.sort((a, b) => {
+      const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
+      const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
+      return numB - numA;
+    });
 
     return NextResponse.json({
       success: true,
@@ -158,16 +160,36 @@ export async function POST(request) {
 
     let createdOrder = null;
 
-    // Generate order ID unik
-    const countRes = await query('SELECT id FROM orders ORDER BY created_at DESC LIMIT 1');
-    let orderNum = 91;
-    if (countRes.isMysql && countRes.rows && countRes.rows.length > 0) {
-      const match = String(countRes.rows[0].id || '').match(/\d+/);
-      if (match) {
-        orderNum = Math.max(91, parseInt(match[0], 10) + 1);
+    // Generate order ID unik (cek nomor tertinggi dari MySQL & fallback store agar tidak pernah bentrok/menimpa)
+    let maxNum = 90;
+
+    // 1. Cek dari database MySQL jika aktif
+    try {
+      const countRes = await query('SELECT id FROM orders ORDER BY created_at DESC');
+      if (countRes.isMysql && countRes.rows && countRes.rows.length > 0) {
+        for (const r of countRes.rows) {
+          const match = String(r.id || '').match(/\d+/);
+          if (match) {
+            const num = parseInt(match[0], 10);
+            if (num > maxNum) maxNum = num;
+          }
+        }
       }
-    }
-    const orderId = body.id || `#BKS-${String(orderNum).padStart(3, '0')}`;
+    } catch (e) {}
+
+    // 2. Cek juga dari data fallback memory / disk orders agar ID unik
+    try {
+      const fallbackOrders = dbFallback.getOrders('all') || [];
+      for (const fo of fallbackOrders) {
+        const match = String(fo.id || '').match(/\d+/);
+        if (match) {
+          const num = parseInt(match[0], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      }
+    } catch (e) {}
+
+    const orderId = body.id || `#BKS-${String(maxNum + 1).padStart(3, '0')}`;
 
     // 1. Selalu simpan ke dbFallback agar instan tersedia di memori kontainer
     const fallbackOrder = dbFallback.addOrder({

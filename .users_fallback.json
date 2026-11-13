@@ -43,5 +43,14 @@
     "name": "Wibowo Agung",
     "phone": "08131313",
     "pin": null
+  },
+  {
+    "id": 6,
+    "identifier": "081219329072",
+    "password": "564411",
+    "role": "customer",
+    "name": "OECOEK",
+    "phone": "081219329072",
+    "pin": null
   }
 ]

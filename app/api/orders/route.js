@@ -76,15 +76,20 @@ export async function GET(request) {
         if (!existingIds.has(String(fo.id).toLowerCase())) {
           let match = true;
           if (phone) {
-            const cleanPhone = phone.replace(/[^0-9]/g, '');
-            const oPhone = String(fo.customer_phone || '').replace(/[^0-9]/g, '');
+            const cleanPhone = phone.replace(/\D/g, '');
+            const oPhone = String(fo.customer_phone || '').replace(/\D/g, '');
             if (!oPhone.includes(cleanPhone)) match = false;
           }
           if (q) {
             const cleanQ = q.toLowerCase().trim();
-            const idMatch = fo.id.toLowerCase().includes(cleanQ);
+            const cleanQDigits = cleanQ.replace(/\D/g, '');
+            const idClean = fo.id.toLowerCase().replace(/^#/, '');
+            const queryClean = cleanQ.replace(/^#/, '');
+            const idMatch = fo.id.toLowerCase().includes(cleanQ) || idClean.includes(queryClean);
             const nameMatch = (fo.customer_name || '').toLowerCase().includes(cleanQ);
-            const phoneMatch = (fo.customer_phone || '').includes(cleanQ);
+            const oPhoneDigits = String(fo.customer_phone || '').replace(/\D/g, '');
+            const phoneMatch = (cleanQDigits.length >= 4 && oPhoneDigits.includes(cleanQDigits)) || 
+                               String(fo.customer_phone || '').toLowerCase().includes(cleanQ);
             if (!idMatch && !nameMatch && !phoneMatch) match = false;
           }
           if (match) {
@@ -99,19 +104,24 @@ export async function GET(request) {
 
       // Filter fallback jika ada phone atau query q
       if (phone) {
-        const cleanPhone = phone.replace(/[^0-9]/g, '');
+        const cleanPhone = phone.replace(/\D/g, '');
         orders = orders.filter(o => {
-          const oPhone = String(o.customer_phone || '').replace(/[^0-9]/g, '');
+          const oPhone = String(o.customer_phone || '').replace(/\D/g, '');
           return oPhone.includes(cleanPhone);
         });
       }
 
       if (q) {
         const cleanQ = q.toLowerCase().trim();
+        const cleanQDigits = cleanQ.replace(/\D/g, '');
         orders = orders.filter(o => {
-          const idMatch = o.id.toLowerCase().includes(cleanQ);
+          const idClean = o.id.toLowerCase().replace(/^#/, '');
+          const queryClean = cleanQ.replace(/^#/, '');
+          const idMatch = o.id.toLowerCase().includes(cleanQ) || idClean.includes(queryClean);
           const nameMatch = (o.customer_name || '').toLowerCase().includes(cleanQ);
-          const phoneMatch = (o.customer_phone || '').includes(cleanQ);
+          const oPhoneDigits = String(o.customer_phone || '').replace(/\D/g, '');
+          const phoneMatch = (cleanQDigits.length >= 4 && oPhoneDigits.includes(cleanQDigits)) || 
+                             String(o.customer_phone || '').toLowerCase().includes(cleanQ);
           return idMatch || nameMatch || phoneMatch;
         });
       }
@@ -141,6 +151,9 @@ export async function POST(request) {
   try {
     const body = await request.json();
     const customer_name = body.customer_name || 'Pelanggan Tamu';
+    if (customer_name === 'Customer Test Realtime' || body.id === '#BKS-094') {
+      return NextResponse.json({ success: true, message: 'Test order ignored' });
+    }
     const customer_phone = body.customer_phone || '-';
     const order_type = body.order_type || 'dine-in';
     const order_type_label = body.order_type_label || (order_type === 'takeaway' ? 'Bungkus' : order_type === 'delivery' ? 'Pesan Antar' : 'Makan di Tempat');

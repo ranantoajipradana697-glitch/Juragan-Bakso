@@ -25,7 +25,7 @@ function PesananContent() {
       if (saved) {
         const u = JSON.parse(saved);
         setCurrentUser(u);
-        if (!queryId && (u.phone || u.identifier)) {
+        if (!queryId && u.role !== 'admin' && (u.phone || u.identifier)) {
           setSearchQuery(u.phone || u.identifier);
         }
       }

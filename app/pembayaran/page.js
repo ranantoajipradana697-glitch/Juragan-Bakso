@@ -28,6 +28,7 @@ export default function PembayaranPage() {
   const [showPreview, setShowPreview] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [referenceCode, setReferenceCode] = useState('');
+  const [activeOrderId, setActiveOrderId] = useState('');
   
   // Timer Batas Waktu QRIS (Tepat 10 Menit = 600 Detik)
   const QRIS_TIMEOUT_SECONDS = 600;
@@ -102,7 +103,7 @@ export default function PembayaranPage() {
   }, [countdown, paymentMethod, showQrisModal, qrisExpired]);
 
   // Fungsi membuka popup modal QRIS & memulai timer 10 menit
-  const handleOpenQrisModal = () => {
+  const handleOpenQrisModal = async () => {
     if (!custName.trim()) {
       showToast('Mohon isi nama pemesan terlebih dahulu');
       return;
@@ -118,6 +119,67 @@ export default function PembayaranPage() {
       setReferenceCode(`BKS-${Math.floor(100 + Math.random() * 900)}`);
     }
     setShowQrisModal(true);
+
+    // Otomatis masukkan pesanan ke antrean kasir & dapur di latar belakang
+    // sehingga saat customer melihat popup barcode QRIS, pesanan sudah langsung tercatat di antrean admin
+    if (!activeOrderId && cart.length > 0) {
+      try {
+        const itemsPayload = cart.map(it => ({
+          id: it.id || undefined,
+          name: it.name,
+          price: it.price,
+          qty: it.qty,
+          subtotal: it.price * it.qty
+        }));
+
+        let orderTypeLabel = 'Makan di Tempat';
+        let metaInfo = tableNo;
+        if (orderType === 'takeaway') {
+          orderTypeLabel = 'Bungkus';
+          metaInfo = pickupTime;
+        } else if (orderType === 'delivery') {
+          orderTypeLabel = 'Pesan Antar';
+          metaInfo = deliveryAddress;
+        }
+
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customer_name: custName,
+            customer_phone: custPhone,
+            order_type: orderType,
+            order_type_label: orderTypeLabel,
+            order_detail_meta: metaInfo,
+            table_or_address: metaInfo,
+            notes: custNotes,
+            items: itemsPayload,
+            subtotal: subtotal,
+            packaging_fee: packagingFee,
+            total: grandTotal,
+            payment_method: 'QRIS Instan (Menunggu Pembayaran)'
+          })
+        });
+
+        const json = await res.json();
+        if (json.success && json.data) {
+          const generatedId = json.data.id;
+          setActiveOrderId(generatedId);
+
+          // Simpan ke localStorage agar sinkron lintas tab
+          try {
+            const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+            const updated = [json.data, ...localOrders.filter(o => o.id !== generatedId)];
+            localStorage.setItem('juragan_bakso_orders', JSON.stringify(updated));
+            localStorage.setItem('juragan_bakso_last_order', JSON.stringify({ id: generatedId, time: Date.now() }));
+            window.dispatchEvent(new Event('orderCreated'));
+            window.dispatchEvent(new Event('stockUpdated'));
+          } catch (e) {}
+        }
+      } catch (e) {
+        console.warn('Latar belakang antrean QRIS:', e.message);
+      }
+    }
   };
 
   // Fungsi mengulang QRIS dengan timer 10 menit baru
@@ -299,28 +361,51 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
       : 'COD Kurir';
 
     try {
-      // Kirim data pesanan ke backend API
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customer_name: custName,
-          customer_phone: custPhone,
-          order_type: orderType,
-          order_type_label: orderTypeLabel,
-          order_detail_meta: metaInfo,
-          table_or_address: metaInfo,
-          notes: custNotes,
-          items: itemsPayload,
-          subtotal: subtotal,
-          packaging_fee: packagingFee,
-          total: grandTotal,
-          payment_method: paymentMethodLabel
-        })
-      });
+      let generatedOrderId = activeOrderId;
+      let orderResponseData = null;
 
-      const json = await res.json();
-      const generatedOrderId = json.data?.id || json.data?.order_id || `#${referenceCode}`;
+      if (activeOrderId) {
+        try {
+          const patchRes = await fetch(`/api/orders/${encodeURIComponent(activeOrderId)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              payment_method: paymentMethodLabel,
+              status: 'baru'
+            })
+          });
+          const patchJson = await patchRes.json();
+          if (patchJson.success && patchJson.data) {
+            orderResponseData = patchJson.data;
+          }
+        } catch (pe) {}
+      }
+
+      if (!orderResponseData) {
+        // Kirim data pesanan ke backend API
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customer_name: custName,
+            customer_phone: custPhone,
+            order_type: orderType,
+            order_type_label: orderTypeLabel,
+            order_detail_meta: metaInfo,
+            table_or_address: metaInfo,
+            notes: custNotes,
+            items: itemsPayload,
+            subtotal: subtotal,
+            packaging_fee: packagingFee,
+            total: grandTotal,
+            payment_method: paymentMethodLabel
+          })
+        });
+
+        const json = await res.json();
+        orderResponseData = json.data;
+        generatedOrderId = json.data?.id || json.data?.order_id || `#${referenceCode}`;
+      }
 
       // Perbarui stok di localStorage juragan_bakso_custom_menus
       try {
@@ -347,7 +432,7 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
 
       // Simpan pesanan ke localStorage juragan_bakso_orders agar pesanan baru tidak hilang saat Vercel cold-start
       try {
-        const fullOrderObj = json.data || {
+        const fullOrderObj = orderResponseData || {
           id: generatedOrderId,
           customer_name: custName,
           customer_phone: custPhone,
@@ -425,6 +510,16 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
         payment_method: paymentMethodLabel,
         notes: custNotes || '-'
       };
+      // Pastikan fallback tetap tersimpan di antrean lokal dan broadcast event
+      try {
+        const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+        const updated = [fallbackSlip, ...localOrders.filter(o => o.id !== fallbackId)];
+        localStorage.setItem('juragan_bakso_orders', JSON.stringify(updated));
+        localStorage.setItem('juragan_bakso_last_order', JSON.stringify({ id: fallbackId, time: Date.now() }));
+        window.dispatchEvent(new Event('orderCreated'));
+        window.dispatchEvent(new Event('stockUpdated'));
+      } catch (e) {}
+
       setOrderSuccessModal({
         open: true,
         orderId: fallbackId,

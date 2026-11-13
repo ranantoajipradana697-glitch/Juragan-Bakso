@@ -141,35 +141,57 @@ export default function AdminDashboardPage() {
       const ordRes = await fetch(`/api/orders?_t=${Date.now()}`, { cache: 'no-store' });
       const ordJson = await ordRes.json();
       if (ordJson.success && ordJson.data) {
-        let serverOrders = ordJson.data;
+        let serverOrders = ordJson.data.filter(o => o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
 
-        // Proteksi pesanan baru agar tidak hilang saat Vercel serverless cold-start
+        // Proteksi dan sinkronisasi pesanan dua arah (Two-Way Union Merge)
         try {
-          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
-          if (localOrders.length > 0) {
-            // Gabungkan pesanan yang baru masuk di browser lokal namun belum tersinkron di kontainer serverless
-            const missing = localOrders.filter(lo => !serverOrders.some(so => so.id === lo.id));
-            if (missing.length > 0) {
-              serverOrders = [...missing, ...serverOrders];
-              // Sinkronkan ke server secara otomatis di latar belakang
-              for (const mo of missing) {
-                fetch('/api/orders', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(mo)
-                }).catch(() => {});
+          const rawLocal = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          const localOrders = rawLocal.filter(o => o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
+          const mergedMap = new Map();
+
+          // 1. Masukkan pesanan lokal terlebih dahulu
+          for (const lo of localOrders) {
+            if (lo && lo.id) {
+              const cleanId = String(lo.id).toUpperCase().trim();
+              mergedMap.set(cleanId, lo);
+            }
+          }
+
+          // 2. Gabungkan pesanan server (server adalah sumber transaksi customer terbaru)
+          for (const so of serverOrders) {
+            if (so && so.id) {
+              const cleanId = String(so.id).toUpperCase().trim();
+              if (mergedMap.has(cleanId)) {
+                const prev = mergedMap.get(cleanId);
+                mergedMap.set(cleanId, {
+                  ...prev,
+                  ...so,
+                  status: so.status || prev.status,
+                  payment_method: so.payment_method || prev.payment_method
+                });
+              } else {
+                mergedMap.set(cleanId, so);
               }
             }
-
-            // Update status pesanan di localOrders jika status di server sudah berubah (misal: dimasak, siap, selesai)
-            const updatedLocal = localOrders.map(lo => {
-              const sm = serverOrders.find(so => so.id === lo.id);
-              return sm ? { ...lo, status: sm.status, payment_method: sm.payment_method } : lo;
-            });
-            localStorage.setItem('juragan_bakso_orders', JSON.stringify(updatedLocal));
-          } else if (serverOrders.length > 0) {
-            localStorage.setItem('juragan_bakso_orders', JSON.stringify(serverOrders));
           }
+
+          // 3. Jika ada pesanan lokal yang belum tersimpan di server, sinkronkan ke server secara background
+          const missingOnServer = localOrders.filter(lo => 
+            lo && lo.id && !serverOrders.some(so => String(so.id).toUpperCase() === String(lo.id).toUpperCase())
+          );
+          if (missingOnServer.length > 0) {
+            for (const mo of missingOnServer) {
+              fetch('/api/orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(mo)
+              }).catch(() => {});
+            }
+          }
+
+          const combinedOrders = Array.from(mergedMap.values());
+          localStorage.setItem('juragan_bakso_orders', JSON.stringify(combinedOrders));
+          serverOrders = combinedOrders;
         } catch (storageErr) {}
 
         // Pastikan urutan pesanan dari ID nomor tertinggi (terbaru) selalu paling atas
@@ -180,6 +202,13 @@ export default function AdminDashboardPage() {
         });
 
         setOrders(serverOrders);
+      } else {
+        try {
+          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+          if (localOrders.length > 0) {
+            setOrders(localOrders);
+          }
+        } catch (e) {}
       }
 
       // 2. Fetch Menus
@@ -285,6 +314,12 @@ export default function AdminDashboardPage() {
       }
     } catch (err) {
       console.error('Error loading dashboard data:', err);
+      try {
+        const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+        if (localOrders.length > 0) {
+          setOrders(localOrders);
+        }
+      } catch (e) {}
     }
   };
 
@@ -439,10 +474,22 @@ ${statusNotes}`
       });
       const json = await res.json();
       if (json.success) {
-        setOrders(orders.map(o => o.id === orderId ? { ...o, payment_method: newPaymentMethod, status: nextStatus } : o));
+        setOrders(orders.map(o => {
+          const cId = String(o.id).toUpperCase();
+          const tId = String(orderId).toUpperCase();
+          return (cId === tId || cId.replace('#', '') === tId.replace('#', '')) 
+            ? { ...o, payment_method: newPaymentMethod, status: nextStatus } 
+            : o;
+        }));
         try {
           const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
-          const updated = localOrders.map(o => o.id === orderId ? { ...o, payment_method: newPaymentMethod, status: nextStatus } : o);
+          const updated = localOrders.map(o => {
+            const cId = String(o.id).toUpperCase();
+            const tId = String(orderId).toUpperCase();
+            return (cId === tId || cId.replace('#', '') === tId.replace('#', '')) 
+              ? { ...o, payment_method: newPaymentMethod, status: nextStatus } 
+              : o;
+          });
           localStorage.setItem('juragan_bakso_orders', JSON.stringify(updated));
         } catch (storageErr) {}
         setCashScanResult({
@@ -493,10 +540,22 @@ ${statusNotes}`
       });
       const json = await res.json();
       if (json.success) {
-        setOrders(orders.map(o => o.id === orderId ? { ...o, status: newStatus } : o));
+        setOrders(orders.map(o => {
+          const cId = String(o.id).toUpperCase();
+          const tId = String(orderId).toUpperCase();
+          return (cId === tId || cId.replace('#', '') === tId.replace('#', '')) 
+            ? { ...o, status: newStatus } 
+            : o;
+        }));
         try {
           const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
-          const updated = localOrders.map(o => o.id === orderId ? { ...o, status: newStatus } : o);
+          const updated = localOrders.map(o => {
+            const cId = String(o.id).toUpperCase();
+            const tId = String(orderId).toUpperCase();
+            return (cId === tId || cId.replace('#', '') === tId.replace('#', '')) 
+              ? { ...o, status: newStatus } 
+              : o;
+          });
           localStorage.setItem('juragan_bakso_orders', JSON.stringify(updated));
         } catch (storageErr) {}
         // Sinkronkan data dashboard agar stok menu dan rekap status langsung terupdate

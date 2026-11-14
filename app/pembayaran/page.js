@@ -1300,6 +1300,12 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
                   />
                 </div>
 
+                {/* Status Tercatat di Antrean */}
+                <div className="w-full py-2 px-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold flex items-center justify-center gap-1.5 shadow-2xs">
+                  <span className="material-symbols-outlined text-[16px] text-emerald-600">check_circle</span>
+                  <span>Pesanan otomatis tercatat &amp; masuk antrean kasir</span>
+                </div>
+
                 {/* Total Tagihan */}
                 <div className="flex flex-col items-center gap-0.5">
                   <span className="text-[11px] text-neutral-500">Total Nominal Pembayaran:</span>

@@ -1,5 +1,29 @@
 [
   {
+    "id": "#BKS-096",
+    "customer_name": "aji",
+    "customer_phone": "0812345678",
+    "order_type": "dine-in",
+    "order_type_label": "Makan di Tempat",
+    "order_detail_meta": "Meja No. 05",
+    "items": [
+      {
+        "id": 1,
+        "name": "Bakso Urat Granat Jumbo",
+        "price": 32000,
+        "qty": 1,
+        "subtotal": 32000
+      }
+    ],
+    "notes": "-",
+    "packaging_fee": 0,
+    "total": 32000,
+    "payment_method": "Kasir Tunai • Lunas",
+    "status": "selesai",
+    "timestamp": "09:56 WIB",
+    "time_ago": "Baru saja"
+  },
+  {
     "id": "#BKS-095",
     "customer_name": "OECOEK",
     "customer_phone": "081219329072",

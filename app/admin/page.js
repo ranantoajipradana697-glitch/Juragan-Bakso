@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import Barcode1D from '@/components/Barcode1D';
@@ -61,6 +61,44 @@ export default function AdminDashboardPage() {
     }, 4500);
   };
 
+  // Tracking pesanan baru untuk memicu lonceng notifikasi audio kasir
+  const knownOrderIdsRef = useRef(new Set());
+  const isInitialLoadRef = useRef(true);
+
+  // Audio Chime Kasir (Web Audio API Synthesizer - Bel Ding-Dong Kasir Lembut)
+  const playOrderChime = () => {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+      const ctx = new AudioContext();
+      const now = ctx.currentTime;
+
+      // Nada 1: D5 (587.33 Hz)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(587.33, now);
+      gain1.gain.setValueAtTime(0.25, now);
+      gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(now);
+      osc1.stop(now + 0.45);
+
+      // Nada 2: A5 (880.00 Hz)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(880, now + 0.15);
+      gain2.gain.setValueAtTime(0.3, now + 0.15);
+      gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.65);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(now + 0.15);
+      osc2.stop(now + 0.65);
+    } catch (e) {}
+  };
+
   // Preset foto kuliner siap pakai untuk admin
   const PRESET_IMAGES = [
     { 
@@ -112,10 +150,19 @@ export default function AdminDashboardPage() {
 
     loadDashboardData();
 
-    // Auto-polling real-time setiap 3 detik agar pesanan yang baru masuk otomatis tampil
+    // Auto-polling real-time adaptif: 2 detik saat tab aktif, melambat saat di latar belakang
     const pollInterval = setInterval(() => {
-      loadDashboardData();
-    }, 3000);
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        loadDashboardData();
+      }
+    }, 2000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadDashboardData();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
 
     // Sinkronisasi lintas tab jika ada pesanan baru masuk
     const handleStorageSync = (e) => {
@@ -129,19 +176,37 @@ export default function AdminDashboardPage() {
 
     return () => {
       clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('storage', handleStorageSync);
       window.removeEventListener('orderCreated', loadDashboardData);
       window.removeEventListener('stockUpdated', loadDashboardData);
     };
   }, []);
 
-  const loadDashboardData = async () => {
+  // 1. Fetch Orders (Mandiri & Kebal dari Gangguan Modul Lain)
+  const fetchOrdersData = async () => {
     try {
-      // 1. Fetch Orders dari API dengan cache-busting
       const ordRes = await fetch(`/api/orders?_t=${Date.now()}`, { cache: 'no-store' });
       const ordJson = await ordRes.json();
       if (ordJson.success && ordJson.data) {
         let serverOrders = ordJson.data.filter(o => o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
+
+        // Deteksi apakah ada pesanan baru yang baru masuk untuk memicu bel kasir & toast notifikasi
+        if (!isInitialLoadRef.current) {
+          const incomingNew = serverOrders.filter(so => 
+            so && so.id && !knownOrderIdsRef.current.has(String(so.id).toUpperCase()) && so.status === 'baru'
+          );
+          if (incomingNew.length > 0) {
+            playOrderChime();
+            showAdminToast(`🔔 ${incomingNew.length} Pesanan Baru Masuk: ${incomingNew[0].id} dari ${incomingNew[0].customer_name}!`, 'success');
+          }
+        }
+
+        // Simpan daftar ID yang sudah diketahui
+        serverOrders.forEach(so => {
+          if (so && so.id) knownOrderIdsRef.current.add(String(so.id).toUpperCase());
+        });
+        isInitialLoadRef.current = false;
 
         // Proteksi dan sinkronisasi pesanan dua arah (Two-Way Union Merge)
         try {
@@ -149,7 +214,7 @@ export default function AdminDashboardPage() {
           const localOrders = rawLocal.filter(o => o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
           const mergedMap = new Map();
 
-          // 1. Masukkan pesanan lokal terlebih dahulu
+          // Masukkan pesanan lokal terlebih dahulu
           for (const lo of localOrders) {
             if (lo && lo.id) {
               const cleanId = String(lo.id).toUpperCase().trim();
@@ -157,7 +222,7 @@ export default function AdminDashboardPage() {
             }
           }
 
-          // 2. Gabungkan pesanan server (server adalah sumber transaksi customer terbaru)
+          // Gabungkan pesanan server (server adalah sumber transaksi customer utama)
           for (const so of serverOrders) {
             if (so && so.id) {
               const cleanId = String(so.id).toUpperCase().trim();
@@ -175,7 +240,7 @@ export default function AdminDashboardPage() {
             }
           }
 
-          // 3. Jika ada pesanan lokal yang belum tersimpan di server, sinkronkan ke server secara background
+          // Sinkronkan ke server secara background jika ada transaksi lokal yang tertinggal
           const missingOnServer = localOrders.filter(lo => 
             lo && lo.id && !serverOrders.some(so => String(so.id).toUpperCase() === String(lo.id).toUpperCase())
           );
@@ -210,23 +275,32 @@ export default function AdminDashboardPage() {
           }
         } catch (e) {}
       }
+    } catch (orderErr) {
+      console.warn('Gagal memuat antrean pesanan dari server, beralih ke cache lokal:', orderErr.message);
+      try {
+        const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+        if (localOrders.length > 0) {
+          setOrders(localOrders);
+        }
+      } catch (e) {}
+    }
+  };
 
-      // 2. Fetch Menus
+  // 2. Fetch Menus (Mandiri)
+  const fetchMenusData = async () => {
+    try {
       const mRes = await fetch(`/api/menus?_t=${Date.now()}`, { cache: 'no-store' });
       const mJson = await mRes.json();
       if (mJson.success && mJson.data) {
         let menuList = mJson.data;
         const isFromMysql = mJson.source === 'mysql';
 
-        // Sinkronisasi menu kustom & stok lokal jika Vercel serverless cold-start
         try {
           const localCustom = JSON.parse(localStorage.getItem('juragan_bakso_custom_menus') || '[]');
           if (localCustom.length > 0) {
-            // Lindungi stok dari reset serverless cold-start
             const updatedLocal = localCustom.map(lm => {
               const serverMatch = menuList.find(sm => sm.name === lm.name || sm.id === lm.id);
               if (serverMatch) {
-                // Jika database MySQL aktif dan persisten, MySQL adalah sumber kebenaran utama
                 if (isFromMysql) {
                   return {
                     ...lm,
@@ -238,18 +312,15 @@ export default function AdminDashboardPage() {
                   };
                 }
 
-                // Jika di Vercel fallback memory (belum terkoneksi ke remote MySQL):
                 const lmStock = Number(lm.stock || 0);
                 const smStock = Number(serverMatch.stock || 0);
 
-                // Jika stok lokal memiliki timestamp modifikasi admin dan berbeda dari server container
                 if (lm.updatedAt && smStock !== lmStock) {
                   serverMatch.stock = lmStock;
                   serverMatch.is_available = lmStock > 0;
                   serverMatch.badge = lm.badge || (lmStock > 0 ? (lmStock <= 5 ? `Menipis (${lmStock})` : 'Tersedia') : 'Habis / Sold Out');
                   serverMatch.badge_type = lm.badge_type || (lmStock > 0 ? (lmStock <= 5 ? 'primary' : 'tertiary') : 'error');
 
-                  // Sembuhkan container serverless di latar belakang
                   fetch(`/api/menus/${serverMatch.id}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
@@ -273,7 +344,6 @@ export default function AdminDashboardPage() {
 
             localStorage.setItem('juragan_bakso_custom_menus', JSON.stringify(updatedLocal));
 
-            // Sinkronkan menuList dengan data yang diproteksi
             menuList = menuList.map(sm => {
               const localMatch = updatedLocal.find(lm => lm.name === sm.name || lm.id === sm.id);
               if (localMatch && localMatch.updatedAt && !isFromMysql) {
@@ -288,11 +358,9 @@ export default function AdminDashboardPage() {
               return sm;
             });
 
-            // Hanya sertakan menu yang benar-benar belum tercatat di server (menu kustom baru)
             const missing = updatedLocal.filter(lm => !menuList.some(sm => sm.name === lm.name || sm.id === lm.id));
             if (missing.length > 0) {
               menuList = [...menuList, ...missing];
-              // Re-sync otomatis ke serverless memory
               for (const mm of missing) {
                 fetch('/api/menus', {
                   method: 'POST',
@@ -305,22 +373,31 @@ export default function AdminDashboardPage() {
         } catch (storageErr) {}
         setMenus(menuList);
       }
+    } catch (menuErr) {
+      console.warn('Gagal memuat katalog menu dari server:', menuErr.message);
+    }
+  };
 
-      // 3. Fetch Settings
+  // 3. Fetch Settings (Mandiri)
+  const fetchSettingsData = async () => {
+    try {
       const sRes = await fetch(`/api/settings?_t=${Date.now()}`, { cache: 'no-store' });
       const sJson = await sRes.json();
       if (sJson.success && sJson.data) {
         setStoreOpen(Boolean(sJson.data.is_open));
       }
-    } catch (err) {
-      console.error('Error loading dashboard data:', err);
-      try {
-        const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
-        if (localOrders.length > 0) {
-          setOrders(localOrders);
-        }
-      } catch (e) {}
+    } catch (settErr) {
+      console.warn('Gagal memuat pengaturan toko:', settErr.message);
     }
+  };
+
+  // 4. Orkestrator Pembaruan Dashboard (Eksekusi Paralel & Aman)
+  const loadDashboardData = async () => {
+    await Promise.allSettled([
+      fetchOrdersData(),
+      fetchMenusData(),
+      fetchSettingsData()
+    ]);
   };
 
   const formatIDR = (num) => {
@@ -1407,22 +1484,56 @@ ${statusNotes}`
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
                   {[
                     { id: 'all', label: `Semua (${orders.length})` },
-                    { id: 'baru', label: `Baru Masuk (${orders.filter(o => o.status === 'baru').length})` },
+                    { id: 'baru', label: `Baru Masuk`, count: orders.filter(o => o.status === 'baru').length },
                     { id: 'masak', label: `Dimasak Dapur (${orders.filter(o => o.status === 'masak').length})` },
                     { id: 'siap', label: `Siap Saji (${orders.filter(o => o.status === 'siap').length})` },
                     { id: 'selesai', label: `Selesai (${orders.filter(o => o.status === 'selesai').length})` },
                     { id: 'batal', label: `Dibatalkan (${orders.filter(o => o.status === 'batal').length})` }
-                  ].map(tab => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setOrderFilter(tab.id)}
-                      className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-colors ${orderFilter === tab.id ? 'bg-primary text-on-primary shadow-sm' : 'bg-surface-container text-on-surface hover:bg-surface-container-high'}`}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
+                  ].map(tab => {
+                    const isBaru = tab.id === 'baru';
+                    const baruCount = tab.count ?? 0;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setOrderFilter(tab.id)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+                          orderFilter === tab.id 
+                            ? 'bg-primary text-on-primary shadow-sm' 
+                            : 'bg-surface-container text-on-surface hover:bg-surface-container-high'
+                        }`}
+                      >
+                        <span>{tab.label}</span>
+                        {isBaru && (
+                          <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                            baruCount > 0 
+                              ? (orderFilter === 'baru' ? 'bg-white text-primary animate-pulse' : 'bg-red-500 text-white animate-pulse') 
+                              : 'bg-surface-container-high text-on-surface-variant'
+                          }`}>
+                            ({baruCount})
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
+
+              {/* Banner Peringatan Pesanan Baru jika Admin sedang berada di Tab Filter Lain */}
+              {newOrdersCount > 0 && orderFilter !== 'all' && orderFilter !== 'baru' && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 text-xs shadow-xs animate-in fade-in">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-amber-700 text-[20px] animate-bounce shrink-0">notifications_active</span>
+                    <span>Perhatian: Ada <strong>{newOrdersCount} tiket pesanan baru</strong> yang baru masuk dan belum diproses!</span>
+                  </div>
+                  <button 
+                    onClick={() => setOrderFilter('baru')}
+                    className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-bold text-[11px] transition-colors flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto"
+                  >
+                    <span>Buka Tab Baru Masuk</span>
+                    <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
+                  </button>
+                </div>
+              )}
 
               {/* Table */}
               <div className="overflow-x-auto">

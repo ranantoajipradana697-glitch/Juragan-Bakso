@@ -174,6 +174,13 @@ export default function PembayaranPage() {
             localStorage.setItem('juragan_bakso_last_order', JSON.stringify({ id: generatedId, time: Date.now() }));
             window.dispatchEvent(new Event('orderCreated'));
             window.dispatchEvent(new Event('stockUpdated'));
+
+            // BroadcastChannel 0ms instant sync lintas tab
+            if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+              const bc = new BroadcastChannel('juragan_bakso_channel');
+              bc.postMessage({ type: 'ORDER_CREATED', order: json.data });
+              setTimeout(() => bc.close(), 200);
+            }
           } catch (e) {}
         }
       } catch (e) {
@@ -457,6 +464,13 @@ _Pesanan ini dikirim otomatis via Web Pemesanan Resmi Juragan Bakso Nusantara._`
         localStorage.setItem('juragan_bakso_last_order', JSON.stringify({ id: generatedOrderId, time: Date.now() }));
         window.dispatchEvent(new Event('orderCreated'));
         window.dispatchEvent(new Event('stockUpdated'));
+
+        // BroadcastChannel 0ms instant sync lintas tab
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          const bc = new BroadcastChannel('juragan_bakso_channel');
+          bc.postMessage({ type: 'ORDER_CREATED', order: fullOrderObj });
+          setTimeout(() => bc.close(), 200);
+        }
       } catch (e) {}
 
       // Buat tautan WhatsApp resmi dengan nomor tiket yang sinkron

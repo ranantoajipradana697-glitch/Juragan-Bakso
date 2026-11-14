@@ -13,6 +13,7 @@ export default function AdminDashboardPage() {
   const [menus, setMenus] = useState([]);
   const [orderFilter, setOrderFilter] = useState('all');
   const [storeOpen, setStoreOpen] = useState(true);
+  const [dbMode, setDbMode] = useState('checking'); // 'mysql' | 'fallback-memory'
   
   // Modul Tampilan Khusus Dashboard Admin ('orders' | 'inventory' | 'reports')
   const [adminView, setAdminView] = useState('orders');
@@ -174,12 +175,28 @@ export default function AdminDashboardPage() {
     window.addEventListener('orderCreated', loadDashboardData);
     window.addEventListener('stockUpdated', loadDashboardData);
 
+    // BroadcastChannel untuk notifikasi instan 0ms lintas tab
+    let bc = null;
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        bc = new BroadcastChannel('juragan_bakso_channel');
+        bc.onmessage = (event) => {
+          if (event.data?.type === 'ORDER_CREATED' || event.data?.type === 'STATUS_UPDATED') {
+            loadDashboardData();
+          }
+        };
+      }
+    } catch (e) {}
+
     return () => {
       clearInterval(pollInterval);
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('storage', handleStorageSync);
       window.removeEventListener('orderCreated', loadDashboardData);
       window.removeEventListener('stockUpdated', loadDashboardData);
+      if (bc) {
+        try { bc.close(); } catch (e) {}
+      }
     };
   }, []);
 
@@ -188,93 +205,74 @@ export default function AdminDashboardPage() {
     try {
       const ordRes = await fetch(`/api/orders?_t=${Date.now()}`, { cache: 'no-store' });
       const ordJson = await ordRes.json();
+      if (ordJson.source) setDbMode(ordJson.source);
+      let serverOrders = [];
       if (ordJson.success && ordJson.data) {
-        let serverOrders = ordJson.data.filter(o => o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
+        serverOrders = ordJson.data.filter(o => o && o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
+      }
 
-        // Deteksi apakah ada pesanan baru yang baru masuk untuk memicu bel kasir & toast notifikasi
-        if (!isInitialLoadRef.current) {
-          const incomingNew = serverOrders.filter(so => 
-            so && so.id && !knownOrderIdsRef.current.has(String(so.id).toUpperCase()) && so.status === 'baru'
-          );
-          if (incomingNew.length > 0) {
-            playOrderChime();
-            showAdminToast(`🔔 ${incomingNew.length} Pesanan Baru Masuk: ${incomingNew[0].id} dari ${incomingNew[0].customer_name}!`, 'success');
+      // Proteksi dan sinkronisasi pesanan dua arah (Two-Way Union Merge)
+      let combinedOrders = [...serverOrders];
+      try {
+        const rawLocal = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
+        const localOrders = rawLocal.filter(o => o && o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
+        const mergedMap = new Map();
+
+        // 1. Masukkan pesanan lokal terlebih dahulu
+        for (const lo of localOrders) {
+          if (lo && lo.id) {
+            const cleanId = String(lo.id).toUpperCase().trim();
+            mergedMap.set(cleanId, lo);
           }
         }
 
-        // Simpan daftar ID yang sudah diketahui
-        serverOrders.forEach(so => {
-          if (so && so.id) knownOrderIdsRef.current.add(String(so.id).toUpperCase());
-        });
-        isInitialLoadRef.current = false;
-
-        // Proteksi dan sinkronisasi pesanan dua arah (Two-Way Union Merge)
-        try {
-          const rawLocal = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
-          const localOrders = rawLocal.filter(o => o.id !== '#BKS-094' && o.customer_name !== 'Customer Test Realtime');
-          const mergedMap = new Map();
-
-          // Masukkan pesanan lokal terlebih dahulu
-          for (const lo of localOrders) {
-            if (lo && lo.id) {
-              const cleanId = String(lo.id).toUpperCase().trim();
-              mergedMap.set(cleanId, lo);
+        // 2. Gabungkan pesanan server (server memperbarui status transaksi)
+        for (const so of serverOrders) {
+          if (so && so.id) {
+            const cleanId = String(so.id).toUpperCase().trim();
+            if (mergedMap.has(cleanId)) {
+              const prev = mergedMap.get(cleanId);
+              mergedMap.set(cleanId, {
+                ...prev,
+                ...so,
+                status: so.status || prev.status,
+                payment_method: so.payment_method || prev.payment_method
+              });
+            } else {
+              mergedMap.set(cleanId, so);
             }
           }
+        }
 
-          // Gabungkan pesanan server (server adalah sumber transaksi customer utama)
-          for (const so of serverOrders) {
-            if (so && so.id) {
-              const cleanId = String(so.id).toUpperCase().trim();
-              if (mergedMap.has(cleanId)) {
-                const prev = mergedMap.get(cleanId);
-                mergedMap.set(cleanId, {
-                  ...prev,
-                  ...so,
-                  status: so.status || prev.status,
-                  payment_method: so.payment_method || prev.payment_method
-                });
-              } else {
-                mergedMap.set(cleanId, so);
-              }
-            }
-          }
+        combinedOrders = Array.from(mergedMap.values());
+        localStorage.setItem('juragan_bakso_orders', JSON.stringify(combinedOrders));
+      } catch (storageErr) {}
 
-          // Sinkronkan ke server secara background jika ada transaksi lokal yang tertinggal
-          const missingOnServer = localOrders.filter(lo => 
-            lo && lo.id && !serverOrders.some(so => String(so.id).toUpperCase() === String(lo.id).toUpperCase())
-          );
-          if (missingOnServer.length > 0) {
-            for (const mo of missingOnServer) {
-              fetch('/api/orders', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(mo)
-              }).catch(() => {});
-            }
-          }
+      // Urutkan pesanan dari nomor tiket ID tertinggi (terbaru) selalu paling atas
+      combinedOrders.sort((a, b) => {
+        const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
+        const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
+        return numB - numA;
+      });
 
-          const combinedOrders = Array.from(mergedMap.values());
-          localStorage.setItem('juragan_bakso_orders', JSON.stringify(combinedOrders));
-          serverOrders = combinedOrders;
-        } catch (storageErr) {}
-
-        // Pastikan urutan pesanan dari ID nomor tertinggi (terbaru) selalu paling atas
-        serverOrders.sort((a, b) => {
-          const numA = parseInt(String(a.id || '').replace(/\D/g, ''), 10) || 0;
-          const numB = parseInt(String(b.id || '').replace(/\D/g, ''), 10) || 0;
-          return numB - numA;
-        });
-
-        setOrders(serverOrders);
-      } else {
-        try {
-          const localOrders = JSON.parse(localStorage.getItem('juragan_bakso_orders') || '[]');
-          if (localOrders.length > 0) {
-            setOrders(localOrders);
-          }
-        } catch (e) {}
+      // Deteksi apakah ada pesanan baru yang baru masuk pada combinedOrders untuk memicu bel kasir & toast notifikasi
+      if (!isInitialLoadRef.current) {
+        const incomingNew = combinedOrders.filter(co => 
+          co && co.id && !knownOrderIdsRef.current.has(String(co.id).toUpperCase()) && co.status === 'baru'
+        );
+        if (incomingNew.length > 0) {
+          playOrderChime();
+          showAdminToast(`🔔 ${incomingNew.length} Pesanan Baru Masuk: ${incomingNew[0].id} dari ${incomingNew[0].customer_name}!`, 'success');
+        }
       }
+
+      // Simpan seluruh ID yang sudah terdaftar ke knownOrderIdsRef
+      combinedOrders.forEach(co => {
+        if (co && co.id) knownOrderIdsRef.current.add(String(co.id).toUpperCase());
+      });
+      isInitialLoadRef.current = false;
+
+      setOrders(combinedOrders);
     } catch (orderErr) {
       console.warn('Gagal memuat antrean pesanan dari server, beralih ke cache lokal:', orderErr.message);
       try {
@@ -637,6 +635,15 @@ ${statusNotes}`
         } catch (storageErr) {}
         // Sinkronkan data dashboard agar stok menu dan rekap status langsung terupdate
         loadDashboardData();
+
+        // Broadcast status update lintas tab
+        try {
+          if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+            const bc = new BroadcastChannel('juragan_bakso_channel');
+            bc.postMessage({ type: 'STATUS_UPDATED', orderId, newStatus });
+            setTimeout(() => bc.close(), 200);
+          }
+        } catch (e) {}
         
         // Tampilkan toast untuk menawarkan pengiriman notifikasi WhatsApp ke pemesan
         const targetOrder = orders.find(o => o.id === orderId);
@@ -1473,9 +1480,18 @@ ${statusNotes}`
                 <section className="flex flex-col gap-4 bg-surface-container-lowest p-6 rounded-2xl shadow-sm border border-outline-variant/30" id="orders-section">
               <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-3 border-b border-surface-container">
                 <div className="flex flex-col gap-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-tertiary animate-pulse"></span>
                     <span className="font-headline-md text-lg font-bold text-on-surface">Antrean Pesanan Masuk (Realtime Sync)</span>
+                    {dbMode === 'mysql' ? (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold border border-emerald-300 flex items-center gap-1" title="Tersambung ke Database MySQL. Pesanan dari semua HP/Laptop sinkron langsung.">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span> MySQL Cloud Online
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-300 flex items-center gap-1" title="Mode serverless fallback. Pesanan antar-tab browser sinkron langsung. Hubungkan DATABASE_URL di Vercel untuk sinkron lintas HP dan laptop.">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span> Serverless Sync
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-on-surface-variant">Pesanan tersinkronisasi otomatis dari etalase pelanggan dan langsung masuk ke antrean dapur.</p>
                 </div>
